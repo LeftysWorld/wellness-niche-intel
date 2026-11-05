@@ -42,8 +42,8 @@ export async function evaluate(
   const pref = profile.params.own_or_lease ?? 'either';
   const tenures: Tenure[] = pref === 'own' ? ['own'] : pref === 'lease' ? ['lease'] : ['lease', 'own'];
   const targetYear = Number(profile.params.target_year ?? 1);
-  const out: Candidate[] = tenures.map((tenure) => {
-    const build = buildModel({
+  const build = (tenure: Tenure, withStaff: boolean) => {
+    const b = buildModel({
       // deno-lint-ignore no-explicit-any
       niche: { slug: niche.slug, name: niche.name, model: niche.card.model as any },
       template,
@@ -51,9 +51,15 @@ export async function evaluate(
       ledger,
       profile: profile.params,
       tenure,
+      withStaff,
     });
-    if (opts.pairingId) build.model.pairingId = opts.pairingId;
-    return { tenure, build, result: analyze(build.model, { simulations: opts.simulations, seed: 42 }) };
+    if (opts.pairingId) b.model.pairingId = opts.pairingId;
+    return { tenure, build: b, result: analyze(b.model, { simulations: opts.simulations, seed: 42 }) };
+  };
+  const out: Candidate[] = tenures.map((tenure) => {
+    // Solo first; if the owner's hours would be exceeded, add the niche's staff.
+    const solo = build(tenure, false);
+    return solo.result.capacity.exceeded && !solo.build.staffed ? build(tenure, true) : solo;
   });
   const rank = (c: Candidate) => (c.result.startup.fundable ? 1e9 : 0) + snapshotFor(c.result, targetYear).profit.p50;
   return out.sort((a, b) => rank(b) - rank(a));

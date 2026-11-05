@@ -91,11 +91,18 @@ export interface BuildInput {
   ledger: Ledger;
   profile: ProfileParams;
   tenure: Tenure;
+  /** Include the niche's paid staff even for a solo owner (used when the owner's hours would be exceeded). */
+  withStaff?: boolean;
 }
+
+/** Rent for the site is always added from the place's ledger value, never from a niche's own cost list. */
+const RENT_LINE = /\b(lease|rent|renta|arriendo|alquiler)\b/i;
 
 export interface BuildOutput {
   model: BusinessModel;
   tenure: Tenure;
+  /** False when the owner runs it alone with no paid staff. */
+  staffed: boolean;
   usedAssumptionIds: string[];
   /** Ledger keys the model needed but could not find; a fallback was used. */
   missing: string[];
@@ -211,9 +218,12 @@ export function buildModel(input: BuildInput): BuildOutput {
   // Monthly costs.
   const fixed: MonthlyCost[] = spec.fixed
     .filter((f) => f.applies === 'both' || f.applies === tenure)
+    .filter((f) => !RENT_LINE.test(`${f.key} ${f.label}`))
     .map((f) => ({ key: f.key, label: f.label, amount: scaled(f.usd, f.scale) }));
   if (tenure === 'lease') fixed.unshift({ key: 'lease', label: 'Lease', amount: lease });
-  const staffing: MonthlyCost[] = spec.staffing.map((s) => ({
+  // A solo owner does the work themselves; paid staff only when asked for or when the hours don't fit.
+  const solo = String(profile.operator_model ?? 'solo') === 'solo' && !input.withStaff;
+  const staffing: MonthlyCost[] = (solo ? [] : spec.staffing).map((s) => ({
     key: s.key,
     label: s.label,
     amount: mul(s.wageMultiple, wage),
@@ -272,6 +282,7 @@ export function buildModel(input: BuildInput): BuildOutput {
   return {
     model,
     tenure,
+    staffed: !solo,
     usedAssumptionIds: [...used],
     missing: missing.filter((k) => !optional.has(k)),
     weakInputs: [...weak],

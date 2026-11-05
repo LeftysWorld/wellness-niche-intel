@@ -110,7 +110,7 @@ export async function analyzePairing(run: Run, pairingId: string, opts: { resear
         run_id: run.id,
         pairing_id: pairingId,
         model: best.build.model,
-        result: { ...best.result, tenure: best.tenure, missing: best.build.missing, weakInputs: best.build.weakInputs, alternative: alt ? { tenure: alt.tenure, month12: alt.result.month12, month36: alt.result.month36, month60: alt.result.month60, startup: alt.result.startup.total } : null },
+        result: { ...best.result, tenure: best.tenure, staffed: best.build.staffed, missing: best.build.missing, weakInputs: best.build.weakInputs, alternative: alt ? { tenure: alt.tenure, month12: alt.result.month12, month36: alt.result.month36, month60: alt.result.month60, startup: alt.result.startup.total } : null },
         assumption_ids: best.build.usedAssumptionIds,
         confidence: weak > 4 ? 'low' : weak > 1 ? 'medium' : 'high',
         verifier_status: 'pending',

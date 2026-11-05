@@ -48,3 +48,22 @@ test('owned US build adds land, uses a loan, and reports missing keys', () => {
   assert.ok(out.missing.includes('land.price_per_acre_usd'));
   assert.ok(out.model.exit.buildingValue > 0);
 });
+
+test('solo owner gets no paid staff unless asked; staff come back with withStaff', () => {
+  const loc = { slug: 'co-ant-el-retiro', name: 'El Retiro', country_code: 'CO' };
+  const solo = buildModel({ niche, template: data.template, location: loc, ledger: colombia, profile: { ...profile, operator_model: 'solo' }, tenure: 'lease' });
+  assert.equal(solo.model.costs.staffing.length, 0);
+  assert.equal(solo.staffed, false);
+  const staffed = buildModel({ niche, template: data.template, location: loc, ledger: colombia, profile: { ...profile, operator_model: 'solo' }, tenure: 'lease', withStaff: true });
+  assert.ok(staffed.model.costs.staffing.length > 0);
+  const team = buildModel({ niche, template: data.template, location: loc, ledger: colombia, profile: { ...profile, operator_model: 'team' }, tenure: 'lease' });
+  assert.ok(team.model.costs.staffing.length > 0);
+});
+
+test('a niche rent line is dropped so the lease is counted once', () => {
+  const withRent = { ...niche, model: { ...niche.model, fixed: [...niche.model.fixed, { key: 'site_lease', label: 'Site or house lease', usd: { low: 2000, mode: 2500, high: 3000 }, scale: 'none', applies: 'both' }] } };
+  const out = buildModel({ niche: withRent, template: data.template, location: { slug: 'x', name: 'x', country_code: 'CO' }, ledger: colombia, profile, tenure: 'lease' });
+  const rentLines = out.model.costs.fixed.filter((f) => /lease|rent/i.test(`${f.key} ${f.label}`));
+  assert.equal(rentLines.length, 1);
+  assert.equal(rentLines[0].key, 'lease');
+});

@@ -157,7 +157,7 @@ async function draftNiche(run: Run, models: Models, nicheId: string) {
     prompt: [
       context,
       `Reference economics for a different niche, to show the expected shape and scale:\n${clip(JSON.stringify(reference?.card?.model ?? {}), 3000)}`,
-      'Give the economics. A stream with one unit and one sale a month is a flat monthly revenue line. wageMultiple is a multiple of one full-time local wage. Include a lease deposit startup item (leaseMonths 2, applies lease) and mark items own/lease where they differ (buildings are "own"; converting a leased house is "lease").',
+      'Give the economics. Do not include rent, lease or land in fixed costs (the place\'s lease is added separately). List paid staff the business would need if the owner did not do the work; the owner runs it solo when the hours fit. ownerFixedHours must include all hours someone has to be on site (open hours, check-ins), not just admin. A stream with one unit and one sale a month is a flat monthly revenue line. wageMultiple is a multiple of one full-time local wage. Include a lease deposit startup item (leaseMonths 2, applies lease) and mark items own/lease where they differ (buildings are "own"; converting a leased house is "lease").',
     ].join('\n\n'),
     tool: { name: 'niche_economics', description: 'Unit economics and start-up costs', schema: ECONOMICS_SCHEMA },
     maxTokens: 12000,

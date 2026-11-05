@@ -101,6 +101,7 @@ export function Ideas() {
                 </div>
                 <p className="small">
                   {tenure === 'own' ? 'Buy land' : tenure === 'lease' ? 'Lease a property' : ''}
+                  {(r?.staffed ?? p.scores?.staffed) === true ? ' · needs paid staff' : (r?.staffed ?? p.scores?.staffed) === false ? ' · you run it solo' : ''}
                   {p.locations?.fit?.summary && <> · {p.locations.fit.summary}</>}
                 </p>
                 <footer>
