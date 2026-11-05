@@ -84,7 +84,7 @@ export function Ideas() {
     );
 
   return (
-    <Section title="Business ideas" actions={<RunButton label="Re-rank ideas" action={() => callAgent('fit-screen')} onDone={reload} />}>
+    <Section title="Business ideas" actions={<RunButton label="Re-rank ideas" action={() => callAgent('fit-screen')} onDone={() => setTimeout(reload, 60000)} />}>
       <p className="muted small">
         Every written-up niche in every place you keep. Money figures are monthly averages for the first and third year after opening,{' '}
         {afterTax ? 'after estimated income tax' : 'before income tax'}, after loan payments and a repair reserve. Your target: {usd(target)}/month.

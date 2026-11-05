@@ -40,7 +40,7 @@ export function Settings() {
     setMsg('Saved. Re-ranking ideas with the new settings…');
     try {
       await callAgent('fit-screen');
-      setMsg('Saved and re-ranked.');
+      setMsg('Saved. Re-ranking runs in the background; refresh Business ideas in a minute or two.');
     } catch (e) {
       setMsg(`Saved. Re-ranking failed: ${e instanceof Error ? e.message : e}`);
     }
