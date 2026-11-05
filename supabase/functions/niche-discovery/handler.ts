@@ -131,6 +131,8 @@ async function draftNiche(run: Run, models: Models, nicheId: string) {
   if (!problems.length) {
     const last = must(await db().from('cost_templates').select('version').eq('niche_id', nicheId).order('version', { ascending: false }).limit(1).maybeSingle(), 'template version');
     await db().from('cost_templates').insert({ niche_id: nicheId, version: (last?.version ?? 0) + 1, template, notes: `Drafted by run ${run.id}` });
+    // Screen the new niche in every place right away, so its ideas appear today.
+    await db().rpc('queue_fit_screen', { p_niche: nicheId, p_location: null });
   }
   await db().from('review_queue').insert({
     item_type: 'niche',
