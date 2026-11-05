@@ -80,7 +80,10 @@ export async function ask<T>(opts: AskOptions): Promise<T> {
     try {
       return JSON.parse(text) as T;
     } catch {
-      throw new Error(`Model reply was not valid JSON: ${text.slice(0, 200)}`);
+      // Only possible without the schema guarantee; one more try usually fixes it.
+      lastErr = `Model reply was not valid JSON: ${text.slice(0, 200)}`;
+      if (!constrained && attempt < 3) continue;
+      throw new Error(lastErr);
     }
   }
   throw new Error(`Anthropic unavailable after retries: ${lastErr}`);
