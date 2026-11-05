@@ -72,7 +72,7 @@ export async function scoutLocation(run: Run, locationId: string, opts: { keys?:
       // Numbers feed the money model directly, so they get the mid-tier model.
       model: models.numbers ?? models.judgment,
       system:
-        'You extract every figure for one value from search results, each with its source and an exact quote. Report one entry per listing, statistic or source (not one summary figure), at most 12 entries. Keep each quote short: just the words around the figure, under 25 words. Keep the note under 40 words. Convert currency and units to what is asked (e.g. hectares to acres, yearly to monthly) and say how in the note. Use figures about this place or the closest comparable nearby. Set found=false only when nothing in the results is about this value.',
+        'You extract every figure for one value from search results, each with its source and an exact quote. Report one entry per listing, statistic or source (not one summary figure), at most 12 entries. Keep each quote short: just the words around the figure, under 25 words. Keep the note under 40 words. Convert currency and units to what is asked (e.g. hectares to acres, yearly to monthly) and say how in the note. Use figures about this place, or failing that from elsewhere in the same country; never use figures from another country. Set found=false only when nothing in the results is about this value.',
       prompt: [
         `Location: ${location.name}${country ? `, ${country}` : ''} (${location.country_code}).`,
         `Value wanted (${key}): ${KEY_GUIDE[key] ?? key}.`,
@@ -238,6 +238,10 @@ function queryFor(key: string, l: LocationRow): string {
       return `population ${place} metropolitan area`;
     case 'exit.country_discount':
       return `foreign buyer risk real estate ${place} title currency`;
+    case 'build.cost_per_sqft_usd':
+      return es ? `costo construcción por metro cuadrado ${place} 2026` : `cost to build per square foot ${place} 2026`;
+    case 'price.lodging_night_usd':
+      return es ? `glamping ${place} precio por noche` : `glamping cabin ${place} price per night`;
     default:
       return `${KEY_GUIDE[key] ?? key} ${place}`;
   }
@@ -282,5 +286,7 @@ function portalQuery(key: string, l: LocationRow): string {
   const portal = l.country_code === 'US' ? 'land.com OR zillow' : l.country_code === 'CO' ? 'fincaraiz OR metrocuadrado' : 'encuentra24';
   if (key.startsWith('land')) return `${portal} land for sale ${l.name}`;
   if (key.startsWith('lease')) return `${portal} rent ${l.name} ${key.includes('commercial') ? 'commercial' : key.includes('estate') ? 'farm estate' : 'house'}`;
+  if (key === 'price.lodging_night_usd') return `airbnb OR booking.com eco lodge cabin ${l.name} per night`;
+  if (key === 'build.cost_per_sqft_usd') return l.country_code === 'CO' ? `Camacol costos de construcción m2 ${l.name}` : `construction cost per square foot ${l.name} builder`;
   return `${KEY_GUIDE[key] ?? key} ${l.name}`;
 }
