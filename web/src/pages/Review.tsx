@@ -19,7 +19,12 @@ export function Review() {
   const f = useFilters<Q>({
     tab: 'review',
     rows: data ?? [],
-    defaults: { enums: { status: ['Waiting'] } },
+    noun: 'items',
+    views: [
+      { label: 'Waiting for me', criteria: { enums: { status: ['Waiting'] } } },
+      { label: 'Decided', criteria: { enums: { status: ['Approved', 'Rejected', 'More research'] } } },
+      { label: 'Everything' },
+    ],
     sorts: [
       { key: 'new', label: 'Newest first', cmp: (a, b) => Date.parse(b.created_at) - Date.parse(a.created_at) },
       { key: 'old', label: 'Oldest first', cmp: (a, b) => Date.parse(a.created_at) - Date.parse(b.created_at) },
@@ -29,7 +34,7 @@ export function Review() {
       { key: 'text', label: 'Text', type: 'text', get: (q) => [q.summary, q.payload?.url].join(' ') },
       { key: 'status', label: 'Status', type: 'enum', group: 'Item', get: (q) => STATUS[q.status] ?? q.status, order: Object.values(STATUS) },
       { key: 'type', label: 'Type', type: 'enum', group: 'Item', get: (q) => TYPE[q.item_type] ?? String(q.item_type).replace('_', ' ') },
-      { key: 'link', label: 'Has an example link', type: 'bool', group: 'Item', get: (q) => Boolean(q.payload?.url) },
+      { key: 'link', label: 'Has a link', type: 'bool', quick: true, get: (q) => Boolean(q.payload?.url) },
       { key: 'age', label: 'Days since added', type: 'number', group: 'When', get: (q) => days(q.created_at) },
       { key: 'decided', label: 'Days since decided', type: 'number', group: 'When', get: (q) => days(q.decided_at) },
     ],
@@ -47,10 +52,9 @@ export function Review() {
   }
 
   return (
-    <FilterLayout panel={f.panel} active={f.active}>
+    <FilterLayout f={f}>
       <Section title="Review queue">
         <Err error={error} />
-        {f.summary}
         {!data ? (
           <Loading />
         ) : f.rows.length === 0 ? (

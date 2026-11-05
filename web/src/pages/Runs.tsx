@@ -116,6 +116,13 @@ export function Runs() {
   const days = (iso?: string | null) => (iso ? (Date.now() - Date.parse(iso)) / 86_400_000 : null);
   const f = useFilters<R>({
     tab: 'activity',
+    noun: 'runs',
+    views: [
+      { label: 'All runs' },
+      { label: 'Problems', criteria: { enums: { status: ['failed', 'budget_exceeded'] } } },
+      { label: 'Last 24 hours', criteria: { enums: { when: ['Last 24 hours'] } } },
+      { label: 'Cost 10¢ or more', criteria: { ranges: { cost: [0.1, null] } } },
+    ],
     rows: data?.runs ?? [],
     sorts: [
       { key: 'new', label: 'Newest first', cmp: (a, b) => Date.parse(b.started_at) - Date.parse(a.started_at) },
@@ -126,8 +133,8 @@ export function Runs() {
       { key: 'text', label: 'Text', type: 'text', get: (r) => [r.error, r.kind].join(' ') },
       { key: 'kind', label: 'Kind', type: 'enum', group: 'Run', get: (r) => KIND[r.kind] ?? r.kind },
       { key: 'status', label: 'Status', type: 'enum', group: 'Run', get: (r) => r.status, order: ['running', 'succeeded', 'failed', 'budget_exceeded', 'skipped'] },
-      { key: 'err', label: 'Has an error', type: 'bool', group: 'Run', get: (r) => Boolean(r.error) },
-      { key: 'est', label: 'Cost is estimated', type: 'bool', group: 'Run', get: (r) => r.cost.estimated },
+      { key: 'err', label: 'Has an error', type: 'bool', quick: true, get: (r) => Boolean(r.error) },
+      { key: 'est', label: 'Estimated cost', type: 'bool',  group: 'Run', get: (r) => r.cost.estimated },
       { key: 'cost', label: 'Cost (USD)', type: 'number', group: 'Size', get: (r) => Math.round(r.total * 10000) / 10000, fmt: money },
       { key: 'tokens', label: 'Tokens', type: 'number', group: 'Size', get: (r) => r.tokens_used },
       { key: 'searches', label: 'Searches', type: 'number', group: 'Size', get: (r) => r.search_calls },
@@ -139,7 +146,7 @@ export function Runs() {
   const shownCost = f.rows.reduce((a, r) => a + r.total, 0);
   const pct = (a: number, b: number) => (b ? Math.round((a / b) * 100) : 0);
   return (
-    <FilterLayout panel={f.panel} active={f.active}>
+    <FilterLayout f={f}>
       {data && data.failures.length > 0 && (
         <div className="banner err">
           <b>{data.failures.length} run{data.failures.length === 1 ? '' : 's'} failed or hit a budget in the last 24 hours with no successful run of that kind since.</b> Latest:{' '}
@@ -229,7 +236,6 @@ export function Runs() {
         )}
       </Section>
       <Section title="Recent runs">
-        {f.summary}
         {data && (
           <p className="small muted">
             Cost of the runs shown: <b>{money(shownCost)}</b>. Cost = tokens each run actually used × list price

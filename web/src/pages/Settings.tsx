@@ -45,6 +45,13 @@ export function Settings() {
   const [msg, setMsg] = useState<string | null>(null);
   const f = useFilters<Item>({
     tab: 'settings',
+    noun: 'settings',
+    views: [
+      { label: 'All settings' },
+      { label: 'My goal', criteria: { enums: { section: ['My goal'] } } },
+      { label: 'Money and work', criteria: { enums: { section: ['Money and work'] } } },
+      { label: 'How ideas are scored', criteria: { enums: { section: ['How ideas are scored'] } } },
+    ],
     rows: ITEMS,
     fields: [
       { key: 'text', label: 'Text', type: 'text', get: (i) => `${i.label} ${i.hint}` },
@@ -77,9 +84,8 @@ export function Settings() {
   }
 
   return (
-    <FilterLayout panel={f.panel} active={f.active}>
+    <FilterLayout f={f}>
     <div className="settings">
-      {f.summary}
       {anyIn('My goal') && (
       <Section title="My goal">
         <div className="row">

@@ -207,7 +207,15 @@ export function Locations() {
   const f = useFilters<PlaceRow>({
     tab: 'locations',
     rows,
-    defaults: { enums: { list: ['My places', 'Suggested'] } },
+    noun: 'places',
+    views: [
+      { label: 'My places and suggestions', criteria: { enums: { list: ['My places', 'Suggested'] } } },
+      { label: 'My places', criteria: { enums: { list: ['My places'] } } },
+      { label: 'Starred', criteria: { enums: { list: ['My places'] }, bools: { fav: true } } },
+      { label: 'Suggestions', criteria: { enums: { list: ['Suggested'] } } },
+      { label: 'Removed', criteria: { enums: { list: ['Removed'] } } },
+      { label: 'All places' },
+    ],
     sorts: [
       { key: 'starred', label: 'Starred, then best match', cmp: (a, b) => Number(b.p.favorite) - Number(a.p.favorite) || (b.p.fit?.score ?? -1) - (a.p.fit?.score ?? -1) },
       { key: 'match', label: 'Best match', cmp: (a, b) => (b.p.fit?.score ?? -1) - (a.p.fit?.score ?? -1) },
@@ -220,10 +228,9 @@ export function Locations() {
       ratingField<PlaceRow>('match', 'Match to my description', (r) => r.p.fit?.score),
       { key: 'list', label: 'List', type: 'enum', group: 'Place', get: (r) => r.list, order: ['My places', 'Suggested', 'Removed'] },
       { key: 'country', label: 'Country', type: 'enum', group: 'Place', get: (r) => r.country },
-      { key: 'fav', label: 'Starred', type: 'bool', group: 'Place', get: (r) => r.p.favorite },
+      { key: 'fav', label: 'Starred', type: 'bool', quick: true, get: (r) => r.p.favorite },
       { key: 'origin', label: 'Where it came from', type: 'enum', group: 'Place', get: (r) => ORIGIN[r.p.origin] ?? r.p.origin },
-      { key: 'match', label: 'Match to my description /10', type: 'number', group: 'Place', get: (r) => r.p.fit?.score },
-      { key: 'scored', label: 'Scored against my description', type: 'bool', group: 'Place', get: (r) => r.p.fit?.score !== undefined },
+      { key: 'scored', label: 'Scored', type: 'bool', quick: true, get: (r) => r.p.fit?.score !== undefined },
       ...FACTS.map(([key, label]) => ({ key, label, type: 'number' as const, group: 'Local costs', get: num(key), fmt: key.startsWith('demand') ? (v: number) => Math.round(v).toLocaleString() : usd })),
       {
         key: 'data',
@@ -236,7 +243,7 @@ export function Locations() {
         },
         order: ['All sourced', 'Some estimates', 'Mostly estimates'],
       },
-      { key: 'searching', label: 'Scout still searching', type: 'bool', group: 'Data', get: (r) => r.missed.length > 0 || FACTS.some(([k]) => isGuess(r.facts[k])) },
+      { key: 'searching', label: 'Still being researched', type: 'bool', quick: true, get: (r) => r.missed.length > 0 || FACTS.some(([k]) => isGuess(r.facts[k])) },
     ],
   });
 
@@ -254,10 +261,9 @@ export function Locations() {
   };
 
   return (
-    <FilterLayout panel={f.panel} active={f.active}>
+    <FilterLayout f={f}>
       <Wishes />
       <AddPlace countries={countries} onAdded={reload} />
-      {f.summary}
       <Section title="My places" actions={<RunButton label="Re-score all" action={() => callAgent('location-fit')} onDone={reload} />}>
         {mine.length === 0 && <p className="muted small">No places match these filters.</p>}
         <div className="cards">

@@ -25,6 +25,8 @@ const PART_LABELS: Record<string, string> = {
   evidence: 'Sourced data',
 };
 
+const ACTIVE = ['Screened', 'Queued for full analysis', 'Analysed', 'Analysed and checked'];
+
 const EVIDENCE = (e: any) => {
   if (!e) return 'Not modelled';
   const pct = Math.round((e.sourcedShare ?? 0) * 100);
@@ -88,17 +90,24 @@ export function Ideas() {
       { key: 'fast', label: 'Quickest to open', cmp: (a, b) => (a.v.months ?? 1e9) - (b.v.months ?? 1e9) },
       { key: 'name', label: 'Name A–Z', cmp: (a, b) => String(a.p.niches?.name).localeCompare(String(b.p.niches?.name)) },
     ],
-    // Ruled-out and rejected ideas are hidden until you tick them.
-    defaults: { enums: { status: ['Screened', 'Queued for full analysis', 'Analysed', 'Analysed and checked'] } },
+    noun: 'ideas',
+    views: [
+      { label: 'Active ideas', criteria: { enums: { status: ACTIVE } } },
+      { label: 'Best bets', criteria: { enums: { status: ACTIVE }, bools: { fundable: true, meets: true } } },
+      { label: 'Starred places', criteria: { enums: { status: ACTIVE }, bools: { placeFav: true } } },
+      { label: 'Run it alone', criteria: { enums: { status: ACTIVE }, bools: { solo: true, fundable: true } } },
+      { label: 'Ruled out', criteria: { enums: { status: ['Ruled out', 'Rejected'] } } },
+      { label: 'Everything' },
+    ],
     fields: [
       { key: 'text', label: 'Text', type: 'text', get: (r) => [r.p.niches?.card?.summary, r.p.niches?.card?.unique_angle, (r.p.hard_filter_reasons ?? []).join(' ')].join(' ') },
       ratingField<Row>('fit', 'Fit score', (r) => r.p.score_total),
       ratingField<Row>('match', 'Place match', (r) => r.p.locations?.fit?.score),
       ratingField<Row>('demand', 'Niche demand', (r) => r.p.niches?.card?.demand_score),
       { key: 'status', label: 'Status', type: 'enum', group: 'Idea', get: (r) => STATUS[r.p.status] ?? r.p.status, order: Object.values(STATUS) },
-      { key: 'meets', label: 'Meets my target in year 1', type: 'bool', group: 'Idea', get: (r) => (r.v.y1 ?? -Infinity) >= target },
-      { key: 'fundable', label: 'Fundable with my cash', type: 'bool', group: 'Idea', get: (r) => r.v.fundable },
-      { key: 'solo', label: 'I can run it alone', type: 'bool', group: 'Idea', get: (r) => (r.v.help ?? 0) <= 0.5 },
+      { key: 'meets', label: 'Meets my target', type: 'bool', quick: true, get: (r) => (r.v.y1 ?? -Infinity) >= target },
+      { key: 'fundable', label: 'Fundable', type: 'bool', quick: true, get: (r) => r.v.fundable },
+      { key: 'solo', label: 'Run it alone', type: 'bool', quick: true, get: (r) => (r.v.help ?? 0) <= 0.5 },
       { key: 'tenure', label: 'Property', type: 'enum', group: 'Idea', get: (r) => (r.v.tenure ? (r.v.tenure === 'own' ? 'Buy land' : 'Lease') : null) },
       { key: 'evidence', label: 'Data quality', type: 'enum', group: 'Idea', get: (r) => EVIDENCE(r.v.evidence), order: ['Mostly sourced', 'Partly guessed', 'Mostly guessed', 'Not modelled'] },
       { key: 'site', label: 'Site check', type: 'enum', group: 'Idea', get: (r) => (r.v.site?.verdict === 'unknown' ? 'Needs checking' : r.v.site?.verdict === 'fail' ? 'Fails' : r.v.site ? 'Passes' : 'Not checked') },
@@ -107,26 +116,23 @@ export function Ideas() {
       { key: 'cash', label: 'My cash needed', type: 'number', group: 'Money', get: (r) => r.v.cash, fmt: usd },
       { key: 'months', label: 'Months to open', type: 'number', group: 'Money', get: (r) => r.v.months },
       { key: 'help', label: 'Paid help h/month', type: 'number', group: 'Money', get: (r) => r.v.help },
-      { key: 'score', label: 'Fit score', type: 'number', group: 'Money', get: (r) => r.p.score_total },
       { key: 'niche', label: 'Niche', type: 'enum', group: 'Niche', get: (r) => r.p.niches?.name },
       { key: 'nicheUse', label: 'Niche status', type: 'enum', group: 'Niche', get: (r) => (r.p.niches?.status === 'approved' ? 'In use' : r.p.niches?.status === 'proposed' ? 'New idea' : r.p.niches?.status) },
-      { key: 'nicheFav', label: 'Starred niche', type: 'bool', group: 'Niche', get: (r) => r.p.niches?.favorite },
+      { key: 'nicheFav', label: 'Starred niche', type: 'bool', quick: true, get: (r) => r.p.niches?.favorite },
       { key: 'place', label: 'Place', type: 'enum', group: 'Place', get: (r) => r.p.locations?.name },
       { key: 'country', label: 'Country', type: 'enum', group: 'Place', get: (r) => r.p.locations?.parent?.name ?? r.p.locations?.country_code },
-      { key: 'placeFav', label: 'Starred place', type: 'bool', group: 'Place', get: (r) => r.p.locations?.favorite },
-      { key: 'match', label: 'Place match /10', type: 'number', group: 'Place', get: (r) => r.p.locations?.fit?.score },
+      { key: 'placeFav', label: 'Starred place', type: 'bool', quick: true, get: (r) => r.p.locations?.favorite },
     ],
   });
   const rows = f.rows;
 
   return (
-    <FilterLayout panel={f.panel} active={f.active}>
+    <FilterLayout f={f}>
     <Section title="Business ideas" actions={<RunButton label="Re-rank ideas" action={() => callAgent('fit-screen')} onDone={() => setTimeout(reload, 60000)} />}>
       <p className="muted small">
         Every written-up niche in every place you keep. Money figures are monthly averages for the first and third year after opening,{' '}
         {afterTax ? 'after estimated income tax' : 'before income tax'}, after loan payments and a repair reserve. Your target: {usd(target)}/month.
       </p>
-      {f.summary}
       <Err error={error} />
       {!data ? (
         <Loading />

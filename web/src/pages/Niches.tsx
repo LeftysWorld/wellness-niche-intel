@@ -42,7 +42,15 @@ export function Niches() {
   const f = useFilters<N>({
     tab: 'niches',
     rows: data ?? [],
-    defaults: { enums: { status: ['In use', 'New idea'] } },
+    noun: 'niches',
+    views: [
+      { label: 'In use and new', criteria: { enums: { status: ['In use', 'New idea'] } } },
+      { label: 'Making money', criteria: { enums: { status: ['In use', 'New idea'] }, bools: { fundable: true } } },
+      { label: 'Starred', criteria: { bools: { fav: true } } },
+      { label: 'New, to decide', criteria: { enums: { status: ['New idea'] } } },
+      { label: 'Not for me', criteria: { enums: { status: ['Not for me'] } } },
+      { label: 'All niches' },
+    ],
     sorts: [
       { key: 'starred', label: 'Starred, then strongest signal', cmp: (a, b) => Number(b.favorite) - Number(a.favorite) || (b.signal_score ?? 0) - (a.signal_score ?? 0) },
       { key: 'money', label: 'Best year-1 take-home', cmp: (a, b) => (b.best?.scores?.target_year_figure ?? -1e9) - (a.best?.scores?.target_year_figure ?? -1e9) },
@@ -54,16 +62,15 @@ export function Niches() {
       ratingField<N>('demand', 'Demand score', (n) => n.card?.demand_score),
       ratingField<N>('bestFit', 'Best idea fit score', (n) => n.bestScore),
       { key: 'status', label: 'Status', type: 'enum', group: 'Niche', get: (n) => STATUS_LABEL(n.status), order: ['In use', 'New idea', 'Not for me'] },
-      { key: 'fav', label: 'Starred', type: 'bool', group: 'Niche', get: (n) => n.favorite },
-      { key: 'written', label: 'Written up', type: 'bool', group: 'Niche', get: (n) => Boolean(n.card?.model) },
+      { key: 'fav', label: 'Starred', type: 'bool', quick: true, get: (n) => n.favorite },
+      { key: 'written', label: 'Written up', type: 'bool', quick: true, get: (n) => Boolean(n.card?.model) },
       { key: 'review', label: 'Independent check', type: 'enum', group: 'Niche', get: (n) => (n.card?.review?.verdict ? ({ pass: 'Passed', flag: 'Flagged', fail: 'Failed' } as Record<string, string>)[String(n.card.review.verdict)] ?? n.card.review.verdict : 'Not checked'), order: ['Passed', 'Flagged', 'Failed', 'Not checked'] },
       { key: 'site', label: 'Site type', type: 'enum', group: 'Niche', get: (n) => (n.card?.model ? n.card.model.siteType ?? 'house' : null) },
       { key: 'needs', label: 'Needs', type: 'enum', group: 'Niche', get: (n) => n.risk_tags ?? [] },
-      { key: 'fundable', label: 'Fundable somewhere', type: 'bool', group: 'Money', get: (n) => n.best?.scores?.fundable },
+      { key: 'fundable', label: 'Fundable somewhere', type: 'bool', quick: true, get: (n) => n.best?.scores?.fundable },
       { key: 'y1', label: 'Best year 1 /mo', type: 'number', group: 'Money', get: (n) => n.best?.scores?.target_year_figure, fmt: usd },
       { key: 'y3', label: 'Best year 3 /mo', type: 'number', group: 'Money', get: (n) => n.best?.scores?.year3_figure, fmt: usd },
       { key: 'bestPlace', label: 'Best place', type: 'enum', group: 'Money', get: (n) => n.best?.locations?.name },
-      { key: 'demand', label: 'Demand score /10', type: 'number', group: 'Evidence', get: (n) => n.card?.demand_score },
       { key: 'signal', label: 'Signal score', type: 'number', group: 'Evidence', get: (n) => n.signal_score },
       { key: 'examples', label: 'Operating examples', type: 'number', group: 'Evidence', get: (n) => (n.example_businesses ?? []).length },
       { key: 'exCountry', label: 'Example countries', type: 'enum', group: 'Evidence', get: (n) => [...new Set((n.example_businesses ?? []).map((e: N) => e.country).filter(Boolean))] },
@@ -83,7 +90,7 @@ export function Niches() {
   }
 
   return (
-    <FilterLayout panel={f.panel} active={f.active}>
+    <FilterLayout f={f}>
     <Section
       title="Niches"
       actions={
@@ -96,7 +103,6 @@ export function Niches() {
       <p className="muted small">
         Wellness businesses that need land or a building. New ideas are written up by the AI with real examples; use one to pair it with your places.
       </p>
-      {f.summary}
       <Err error={error} />
       {!data ? (
         <Loading />
