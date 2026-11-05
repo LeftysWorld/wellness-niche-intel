@@ -69,13 +69,20 @@ export function Ideas() {
     const [pairings, profile] = await Promise.all([
       supabase
         .from('pairings')
-        .select('id,status,score_total,scores,hard_filter_reasons,niches(name,status,card,favorite),locations(id,name,favorite,fit,country_code,active,origin,parent:parent_id(name)),analysis_results!pairings_latest_result_fk(result,verifier_status,confidence)')
+        .select('id,status,score_total,scores,hard_filter_reasons,niches(id,name,status,card,favorite),locations(id,name,favorite,fit,country_code,active,origin,parent:parent_id(name)),analysis_results!pairings_latest_result_fk(result,verifier_status,confidence)')
         .limit(1000),
       supabase.from('parameter_profiles').select('params').eq('is_default', true).single(),
     ]);
     if (pairings.error) throw pairings.error;
     return { rows: pairings.data ?? [], params: profile.data?.params ?? {} };
   });
+
+  // Stars live on the niche and the place, so starring here stars it everywhere.
+  async function star(table: 'niches' | 'locations', rowId: string | undefined, on: boolean) {
+    if (!rowId) return;
+    await supabase.from(table).update({ favorite: on }).eq('id', rowId);
+    reload();
+  }
 
   async function approve(id: string) {
     await supabase.from('pairings').update({ status: 'approved' }).eq('id', id);
@@ -187,7 +194,7 @@ export function Ideas() {
                     <a href={`#pairing/${p.id}`}>
                       {p.niches?.name} in {p.locations?.name}
                     </a>
-                    {p.locations?.favorite && <span title="Starred place"> ★</span>}
+
                   </h3>
                   <span className="score" title="Overall fit score, 0-10">
                     {p.score_total ?? '—'}
@@ -237,6 +244,24 @@ export function Ideas() {
                     </tbody>
                   </table>
                 )}
+                <div className="stars small">
+                  <button
+                    className={`star-chip ${p.locations?.favorite ? 'on' : ''}`}
+                    aria-pressed={Boolean(p.locations?.favorite)}
+                    title={p.locations?.favorite ? 'Unstar this place' : 'Star this place'}
+                    onClick={() => star('locations', p.locations?.id, !p.locations?.favorite)}
+                  >
+                    {p.locations?.favorite ? '★' : '☆'} Place
+                  </button>
+                  <button
+                    className={`star-chip ${p.niches?.favorite ? 'on' : ''}`}
+                    aria-pressed={Boolean(p.niches?.favorite)}
+                    title={p.niches?.favorite ? 'Unstar this niche' : 'Star this niche'}
+                    onClick={() => star('niches', p.niches?.id, !p.niches?.favorite)}
+                  >
+                    {p.niches?.favorite ? '★' : '☆'} Niche
+                  </button>
+                </div>
                 <footer>
                   <span className={`pill ${p.status}`}>{STATUS[p.status] ?? p.status}</span>
                   {p.status === 'candidate' && <button onClick={() => approve(p.id)}>Analyse this idea</button>}

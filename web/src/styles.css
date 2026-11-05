@@ -163,3 +163,7 @@ textarea { font: inherit; width: 100%; box-sizing: border-box; padding: 0.6rem; 
 }
 .two-col { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.25rem; }
 .two-col h3 { margin: 0.25rem 0 0.4rem; font-size: 1rem; }
+.stars { display: flex; gap: 0.35rem; }
+.star-chip { font-size: 0.78rem; padding: 0.15rem 0.55rem; border-radius: 99px; color: var(--muted); }
+.star-chip.on { color: #b07d12; border-color: #d9a53b; background: color-mix(in srgb, #d9a53b 14%, transparent); font-weight: 600; }
+.star { font-size: 1.25rem; padding: 0 0.15rem; }

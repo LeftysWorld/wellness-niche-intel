@@ -310,6 +310,16 @@ export function Locations() {
               <article key={p.id} className="idea">
                 <header>
                   <h3>
+                    <button
+                      className="star"
+                      title="Star: adds it to my places as a favourite"
+                      onClick={async () => {
+                        await update(p.id, { active: true, favorite: true });
+                        callAgent('location-scout', { location_id: p.id }).then(reload, reload);
+                      }}
+                    >
+                      ☆
+                    </button>{' '}
                     {p.name} <small className="muted">· {byId.get(p.parent_id ?? '')?.name ?? p.country_code}</small>
                   </h3>
                   <span className="score">{p.fit?.score ?? '—'}</span>
