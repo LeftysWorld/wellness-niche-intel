@@ -4,6 +4,7 @@
 //   task=refresh  (daily)   re-scout the locations with the stalest data.
 //   task=digest   (weekly)  write a summary of the week.
 // Each call does a small, bounded amount of work so it fits the function time limit.
+import { inPlay } from '../_shared/places.ts';
 import { analyzePairing } from '../_shared/analysis.ts';
 import { db, getSetting, must, type Budgets } from '../_shared/db.ts';
 import { HttpError } from '../_shared/http.ts';
@@ -106,7 +107,10 @@ export async function run(body: Record<string, unknown>) {
     const limit = Number(body.limit ?? 2);
     // Most-guessed first (estimates plus missing required values), then stalest:
     // the refresh keeps replacing guesses with sourced values automatically.
-    const locs = must(await db().from('locations').select('id,slug,level').eq('active', true), 'locations');
+    // Research my places and undismissed suggestions (countries are always active).
+    const locs = (must(await db().from('locations').select('id,slug,level,active,origin,fit').or('active.eq.true,origin.eq.ai_suggested'), 'locations') as {
+      id: string; slug: string; level: string; active: boolean; origin: string; fit: { dismissed?: boolean } | null;
+    }[]).filter((l) => inPlay(l));
     const ages = await Promise.all(
       locs.map(async (l: { id: string; slug: string; level: string }) => {
         const rows = must(await db().from('current_assumptions').select('key,written_by,source_url,retrieved_at').eq('subject_type', 'location').eq('subject_id', l.id), 'values');

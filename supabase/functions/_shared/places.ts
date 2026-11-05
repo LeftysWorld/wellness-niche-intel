@@ -109,18 +109,39 @@ export async function ensureCountry(code: string, name: string) {
 }
 
 /** Suggest new places that match the owner's description and aren't on the list yet. */
-export async function suggestPlaces(run: Run, count = 5) {
+/** Used until the owner writes their own description of what they want in a place. */
+const DEFAULT_WISHES =
+  'A rural or small-town area with land suitable for a small land-based wellness business (retreat, bathhouse, glamping or similar): pleasant climate, natural beauty, within about two hours of an international airport, reasonably safe, affordable land or rent, and visitors or nearby city residents who would pay for wellness.';
+
+/** A place counts as in play when it is on the owner's list or an undismissed suggestion. */
+export const inPlay = (l: { active: boolean; origin?: string | null; fit?: unknown }) =>
+  l.active || (l.origin === 'ai_suggested' && !(l.fit as { dismissed?: boolean } | null)?.dismissed);
+
+/**
+ * The country with the fewest places in play, among the countries already on
+ * the list, so suggestions even out the spread.
+ */
+export async function leastCoveredCountry(): Promise<{ code: string; name: string } | null> {
+  const all = must(await db().from('locations').select('country_code,name,level,active,origin,fit'), 'places');
+  const countries = all.filter((l: { level: string; active: boolean }) => l.level === 'country' && l.active);
+  if (!countries.length) return null;
+  const count = (code: string) => all.filter((l: { level: string; country_code: string } & Parameters<typeof inPlay>[0]) => l.level === 'micro_area' && l.country_code === code && inPlay(l)).length;
+  const c = [...countries].sort((a: { country_code: string }, b: { country_code: string }) => count(a.country_code) - count(b.country_code))[0];
+  return { code: c.country_code, name: c.name };
+}
+
+export async function suggestPlaces(run: Run, count = 5, opts: { country?: { code: string; name: string } } = {}) {
   const profile = await defaultProfile();
-  const wishes = wishesOf(profile.params);
-  if (!wishes) return { suggested: 0, skipped: 'Add a description of what you want in a place first.' };
+  const wishes = wishesOf(profile.params) || DEFAULT_WISHES;
   const models = await getSetting<Models>('models');
   const known = must(await db().from('locations').select('name,country_code').eq('level', 'micro_area'), 'known places');
+  const where = opts.country ? `\n\nOnly suggest places in ${opts.country.name} (${opts.country.code}).` : '';
 
   const plan = await ask<{ queries: string[] }>({
     run,
     model: models.judgment,
     system: 'You write web search queries that find specific small towns or rural areas matching a description.',
-    prompt: `Description:\n"""${clip(wishes, 2000)}"""\n\nAlready on their list: ${known.map((k) => `${k.name} (${k.country_code})`).join('; ')}\n\nWrite 4 short, varied search queries (some in Spanish if Latin America fits) to find other places worth considering.`,
+    prompt: `Description:\n"""${clip(wishes, 2000)}"""\n\nAlready on their list: ${known.map((k) => `${k.name} (${k.country_code})`).join('; ')}\n\nWrite 4 short, varied search queries (some in Spanish if Latin America fits) to find other places worth considering.${where}`,
     tool: { name: 'queries', description: 'Search queries', schema: { type: 'object', properties: { queries: { type: 'array', items: { type: 'string' } } }, required: ['queries'] } },
     maxTokens: 600,
   });
@@ -133,7 +154,7 @@ export async function suggestPlaces(run: Run, count = 5) {
     model: models.judgment,
     system:
       'You suggest specific towns or rural areas (not whole countries or big cities) where someone could live and run a small land-based wellness business. Only suggest places that the search results discuss, and that are not already on their list.',
-    prompt: `What they want:\n"""${clip(wishes, 2000)}"""\n\nAlready on their list (do not repeat): ${known.map((k) => k.name).join('; ')}\n\nSearch results:\n${unique.map((h, i) => `[${i}] ${h.url}\n${h.title}: ${clip(h.snippet, 350)}`).join('\n\n')}\n\nSuggest up to ${count} places.`,
+    prompt: `What they want:\n"""${clip(wishes, 2000)}"""\n\nAlready on their list (do not repeat): ${known.map((k) => k.name).join('; ')}\n\nSearch results:\n${unique.map((h, i) => `[${i}] ${h.url}\n${h.title}: ${clip(h.snippet, 350)}`).join('\n\n')}\n\nSuggest up to ${count} places.${where}`,
     tool: {
       name: 'places',
       description: 'Suggested places',
@@ -169,6 +190,7 @@ export async function suggestPlaces(run: Run, count = 5) {
   for (const p of out.places.slice(0, count)) {
     const source = unique[p.source_index];
     if (!source || knownNames.has(p.name.toLowerCase()) || !/^[A-Za-z]{2}$/.test(p.country_code)) continue;
+    if (opts.country && p.country_code.toUpperCase() !== opts.country.code) continue;
     const country = await ensureCountry(p.country_code, p.country_name);
     const slug = `${p.country_code.toLowerCase()}-${slugify(`${p.region} ${p.name}`)}`;
     const { error } = await db().from('locations').insert({
@@ -182,7 +204,12 @@ export async function suggestPlaces(run: Run, count = 5) {
       notes: `${p.why}\nWatch out: ${p.watch_outs}\nSource: ${source.url}`,
       fit: { score: Math.max(0, Math.min(10, p.score)), summary: p.why, cons: [p.watch_outs], scored_at: new Date().toISOString(), run_id: run.id },
     });
-    if (!error) suggested++;
+    if (!error) {
+      suggested++;
+      // Screen it against every niche straight away; the daily refresh researches its costs.
+      const { data: row } = await db().from('locations').select('id').eq('slug', slug).maybeSingle();
+      if (row?.id) await db().rpc('queue_fit_screen', { p_niche: null, p_location: row.id });
+    }
   }
-  return { suggested };
+  return { suggested, country: opts.country?.code ?? 'any' };
 }

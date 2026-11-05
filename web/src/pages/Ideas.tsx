@@ -25,6 +25,36 @@ const PART_LABELS: Record<string, string> = {
   evidence: 'Sourced data',
 };
 
+/**
+ * Spread a best-first list so no niche or place crowds the top: each pick is the
+ * best remaining idea whose niche has been shown least, then whose place has
+ * been shown least. The result reads like a round: every niche's best idea
+ * first (in different places where possible), then every niche's second best.
+ */
+function spread<T>(list: T[], nicheOf: (r: T) => string, placeOf: (r: T) => string): T[] {
+  const left = [...list];
+  const nUsed = new Map<string, number>();
+  const pUsed = new Map<string, number>();
+  const out: T[] = [];
+  while (left.length) {
+    let bi = 0;
+    let bk = Infinity;
+    for (let i = 0; i < left.length; i++) {
+      const k = (nUsed.get(nicheOf(left[i])) ?? 0) * 1e6 + (pUsed.get(placeOf(left[i])) ?? 0);
+      if (k < bk) {
+        bk = k;
+        bi = i;
+        if (k === 0) break;
+      }
+    }
+    const [pick] = left.splice(bi, 1);
+    nUsed.set(nicheOf(pick), (nUsed.get(nicheOf(pick)) ?? 0) + 1);
+    pUsed.set(placeOf(pick), (pUsed.get(placeOf(pick)) ?? 0) + 1);
+    out.push(pick);
+  }
+  return out;
+}
+
 const ACTIVE = ['Screened', 'Queued for full analysis', 'Analysed', 'Analysed and checked'];
 
 const EVIDENCE = (e: any) => {
@@ -39,7 +69,7 @@ export function Ideas() {
     const [pairings, profile] = await Promise.all([
       supabase
         .from('pairings')
-        .select('id,status,score_total,scores,hard_filter_reasons,niches(name,status,card,favorite),locations(id,name,favorite,fit,country_code,parent:parent_id(name)),analysis_results!pairings_latest_result_fk(result,verifier_status,confidence)')
+        .select('id,status,score_total,scores,hard_filter_reasons,niches(name,status,card,favorite),locations(id,name,favorite,fit,country_code,active,origin,parent:parent_id(name)),analysis_results!pairings_latest_result_fk(result,verifier_status,confidence)')
         .limit(1000),
       supabase.from('parameter_profiles').select('params').eq('is_default', true).single(),
     ]);
@@ -76,14 +106,21 @@ export function Ideas() {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   type Row = { p: any; v: ReturnType<typeof view> };
   const all: Row[] = (data?.rows ?? []).map((p: any) => ({ p, v: view(p) }));
+  const moneyCmp = (a: Row, b: Row) => Number(b.v.fundable) - Number(a.v.fundable) || (b.v.y1 ?? -1e9) - (a.v.y1 ?? -1e9) || (b.v.y3 ?? -1e9) - (a.v.y3 ?? -1e9);
   const f = useFilters<Row>({
     tab: 'ideas',
     rows: all,
     sorts: [
       {
+        key: 'balanced',
+        label: 'Balanced: every niche and place',
+        cmp: (a, b) => moneyCmp(a, b),
+        order: (list) => spread(list, (r) => r.p.niches?.name ?? '', (r) => r.p.locations?.name ?? ''),
+      },
+      {
         key: 'money',
         label: 'Money (fundable first)',
-        cmp: (a, b) => Number(b.v.fundable) - Number(a.v.fundable) || (b.v.y1 ?? -1e9) - (a.v.y1 ?? -1e9) || (b.v.y3 ?? -1e9) - (a.v.y3 ?? -1e9),
+        cmp: (a, b) => moneyCmp(a, b),
       },
       { key: 'score', label: 'Overall fit score', cmp: (a, b) => (b.p.score_total ?? -1) - (a.p.score_total ?? -1) },
       { key: 'cash', label: 'Least cash needed', cmp: (a, b) => (a.v.cash ?? 1e12) - (b.v.cash ?? 1e12) },
@@ -120,6 +157,7 @@ export function Ideas() {
       { key: 'nicheUse', label: 'Niche status', type: 'enum', group: 'Niche', get: (r) => (r.p.niches?.status === 'approved' ? 'In use' : r.p.niches?.status === 'proposed' ? 'New idea' : r.p.niches?.status) },
       { key: 'nicheFav', label: 'Starred niche', type: 'bool', quick: true, get: (r) => r.p.niches?.favorite },
       { key: 'place', label: 'Place', type: 'enum', group: 'Place', get: (r) => r.p.locations?.name },
+      { key: 'placeList', label: 'Place list', type: 'enum', group: 'Place', get: (r) => (r.p.locations?.active ? 'My places' : 'Suggested places'), order: ['My places', 'Suggested places'] },
       { key: 'country', label: 'Country', type: 'enum', group: 'Place', get: (r) => r.p.locations?.parent?.name ?? r.p.locations?.country_code },
       { key: 'placeFav', label: 'Starred place', type: 'bool', quick: true, get: (r) => r.p.locations?.favorite },
     ],
@@ -130,7 +168,7 @@ export function Ideas() {
     <FilterLayout f={f}>
     <Section title="Business ideas" actions={<RunButton label="Re-rank ideas" action={() => callAgent('fit-screen')} onDone={() => setTimeout(reload, 60000)} />}>
       <p className="muted small">
-        Every written-up niche in every place you keep. Money figures are monthly averages for the first and third year after opening,{' '}
+        Every written-up niche in every place you keep, plus places the AI has suggested. Money figures are monthly averages for the first and third year after opening,{' '}
         {afterTax ? 'after estimated income tax' : 'before income tax'}, after loan payments and a repair reserve. Your target: {usd(target)}/month.
       </p>
       <Err error={error} />
@@ -157,6 +195,7 @@ export function Ideas() {
                 </header>
                 <div className="chips">
                   {p.niches?.status === 'proposed' && <span className="pill">new niche</span>}
+                  {p.locations && !p.locations.active && <span className="pill" title="An AI-suggested place you haven't added to your list">suggested place</span>}
                   <EvidenceBadge evidence={v.evidence} />
                   {v.site?.verdict === 'unknown' && <span className="pill warn" title={v.site.reason}>site: check</span>}
                 </div>

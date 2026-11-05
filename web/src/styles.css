@@ -161,3 +161,5 @@ textarea { font: inherit; width: 100%; box-sizing: border-box; padding: 0.6rem; 
   .fl-done { width: 100%; margin-top: 1rem; background: var(--accent); color: var(--card); border-color: var(--accent); padding: 0.55rem; }
   .ft-count { margin-left: 0; }
 }
+.two-col { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.25rem; }
+.two-col h3 { margin: 0.25rem 0 0.4rem; font-size: 1rem; }

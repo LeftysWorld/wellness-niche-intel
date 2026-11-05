@@ -6,6 +6,7 @@ import { db, defaultProfile, getSetting, must, type Thresholds } from '../_share
 import { loadLedger, type LocationRow } from '../_shared/ledger.ts';
 import { evaluate, type NicheRow } from '../_shared/pairing.ts';
 import { scoreIdea, snapshotFor, targetFigure, type TargetBasis } from '../_shared/scoring.ts';
+import { inPlay } from '../_shared/places.ts';
 import { withRun } from '../_shared/runs.ts';
 import { round2 } from '../_shared/engine/random.ts';
 
@@ -33,9 +34,10 @@ export async function run(body: Record<string, unknown>) {
     if (body.niche_id) nq = nq.eq('id', body.niche_id);
     // deno-lint-ignore no-explicit-any
     const niches = (must(await nq, 'niches') as NicheRow[]).filter((n) => n.card?.model && !((n.card as any).smoke_test?.length));
-    let lq = db().from('locations').select('*').eq('active', true).eq('level', 'micro_area');
+    // My places plus undismissed suggestions, so ideas cover places I haven't added yet.
+    let lq = db().from('locations').select('*').eq('level', 'micro_area').or('active.eq.true,origin.eq.ai_suggested');
     if (body.location_id) lq = lq.eq('id', body.location_id);
-    const locations = must(await lq, 'locations') as LocationRow[];
+    const locations = (must(await lq, 'locations') as (LocationRow & { active: boolean })[]).filter((l) => inPlay(l));
     const checks = must(await db().from('niche_place_checks').select('niche_id,location_id,verdict,reason'), 'site checks') as {
       niche_id: string; location_id: string; verdict: string; reason: string;
     }[];

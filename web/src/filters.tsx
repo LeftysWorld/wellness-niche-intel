@@ -31,6 +31,8 @@ export interface SortDef<T> {
   label: string;
   /** Best first. */
   cmp: (a: T, b: T) => number;
+  /** Optional whole-list ordering (e.g. spreading results across groups); runs after cmp. */
+  order?: (rows: T[]) => T[];
 }
 
 export interface FilterState {
@@ -98,8 +100,8 @@ export function useFilters<T>(opts: {
   const { tab, fields, rows, sorts = [], views = [], noun = 'items' } = opts;
   const base: Criteria = clean(views[0]?.criteria ?? {});
   const initial: FilterState = { q: '', ...base, sort: sorts[0]?.key ?? '', reverse: false };
-  const [state, setState] = useState<FilterState>(() => stored(`filters2:${tab}`, initial));
-  useEffect(() => keep(`filters2:${tab}`, state), [tab, state]);
+  const [state, setState] = useState<FilterState>(() => stored(`filters3:${tab}`, initial));
+  useEffect(() => keep(`filters3:${tab}`, state), [tab, state]);
 
   const passes = (row: T, skip?: string) => {
     if (state.q.trim()) {
@@ -136,9 +138,10 @@ export function useFilters<T>(opts: {
     if (!cmp && numField) cmp = (a, b) => (asNum(numField.get(b)) ?? -Infinity) - (asNum(numField.get(a)) ?? -Infinity);
     if (cmp) {
       const c = cmp;
-      kept.sort((a, b) => (state.reverse ? -c(a, b) : c(a, b)));
+      kept.sort((a, b) => c(a, b));
     }
-    return kept;
+    const ordered = custom?.order ? custom.order(kept) : kept;
+    return state.reverse ? [...ordered].reverse() : ordered;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rows, state]);
 
