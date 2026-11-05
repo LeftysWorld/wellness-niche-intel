@@ -19,7 +19,7 @@ export function Rankings() {
 
   return (
     <Section
-      title="Niche × location rankings"
+      title="Best business × location matches"
       actions={<RunButton label="Run fit screen" action={() => callAgent('fit-screen')} onDone={reload} />}
     >
       <div className="filters">

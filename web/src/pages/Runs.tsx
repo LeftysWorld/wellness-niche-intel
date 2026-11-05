@@ -23,11 +23,12 @@ export function Runs() {
   return (
     <>
       <Section
-        title="Usage, last 30 days"
+        title="AI usage, last 30 days"
         actions={
           <>
-            <RunButton label="Orchestrator tick" action={() => callAgent('orchestrator', { task: 'tick' })} onDone={reload} />
-            <RunButton label="Refresh 2 locations" action={() => callAgent('orchestrator', { task: 'refresh', limit: 2 })} onDone={reload} />
+            <RunButton label="Find new businesses" action={() => callAgent('discovery-loop', { mode: 'daily' })} onDone={reload} />
+            <RunButton label="Update location data" action={() => callAgent('orchestrator', { task: 'refresh', limit: 2 })} onDone={reload} />
+            <RunButton label="Analyse next approved" action={() => callAgent('orchestrator', { task: 'tick' })} onDone={reload} />
           </>
         }
       >

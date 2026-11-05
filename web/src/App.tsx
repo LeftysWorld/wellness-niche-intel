@@ -1,56 +1,51 @@
 import { useEffect, useState } from 'react';
 import type { Session } from '@supabase/supabase-js';
-import { supabase } from './supabase.ts';
+import { OWNER_EMAIL, supabase } from './supabase.ts';
 import { Rankings } from './pages/Rankings.tsx';
 import { PairingPage } from './pages/Pairing.tsx';
 import { Review } from './pages/Review.tsx';
-import { Niches } from './pages/Niches.tsx';
-import { Ledger } from './pages/Ledger.tsx';
 import { Runs } from './pages/Runs.tsx';
-import { Digest } from './pages/Digest.tsx';
 
 const NAV = [
-  ['rankings', 'Rankings'],
-  ['review', 'Review queue'],
-  ['niches', 'Niches'],
-  ['ledger', 'Ledger'],
-  ['runs', 'Runs & spend'],
-  ['digest', 'Digest'],
+  ['results', 'Results'],
+  ['review', 'To review'],
+  ['activity', 'Activity'],
 ] as const;
 
 function useHash() {
-  const [hash, setHash] = useState(location.hash.slice(1) || 'rankings');
+  const [hash, setHash] = useState(location.hash.slice(1) || 'results');
   useEffect(() => {
-    const on = () => setHash(location.hash.slice(1) || 'rankings');
+    const on = () => setHash(location.hash.slice(1) || 'results');
     addEventListener('hashchange', on);
     return () => removeEventListener('hashchange', on);
   }, []);
   return hash;
 }
 
+// One owner, one password. The account is created in the Supabase dashboard
+// with "Auto Confirm", so no email is ever sent.
 function Login() {
-  const [email, setEmail] = useState('');
-  const [sent, setSent] = useState(false);
+  const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
   return (
     <main className="login">
       <h1>Wellness Niche Intel</h1>
-      {sent ? (
-        <p>Check {email} for a sign-in link.</p>
-      ) : (
-        <form
-          onSubmit={async (e) => {
-            e.preventDefault();
-            const { error } = await supabase.auth.signInWithOtp({ email, options: { emailRedirectTo: location.origin } });
-            if (error) setError(error.message);
-            else setSent(true);
-          }}
-        >
-          <input type="email" required placeholder="you@example.com" value={email} onChange={(e) => setEmail(e.target.value)} />
-          <button type="submit">Send sign-in link</button>
-          {error && <p className="err">{error}</p>}
-        </form>
-      )}
+      <form
+        onSubmit={async (e) => {
+          e.preventDefault();
+          setBusy(true);
+          const { error } = await supabase.auth.signInWithPassword({ email: OWNER_EMAIL, password });
+          setBusy(false);
+          if (error) setError('Wrong password');
+        }}
+      >
+        <input type="password" required autoFocus placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} />
+        <button type="submit" disabled={busy}>
+          {busy ? 'Signing in…' : 'Sign in'}
+        </button>
+        {error && <p className="err">{error}</p>}
+      </form>
     </main>
   );
 }
@@ -77,19 +72,15 @@ export function App() {
           </a>
         ))}
         <span className="spacer" />
-        <small className="muted">{session.user.email}</small>
         <button className="link" onClick={() => supabase.auth.signOut()}>
           Sign out
         </button>
       </nav>
       <main>
-        {page === 'pairing' && id ? <PairingPage id={id} /> : null}
-        {page === 'rankings' && <Rankings />}
+        {page === 'pairing' && id && <PairingPage id={id} />}
+        {page === 'results' && <Rankings />}
         {page === 'review' && <Review />}
-        {page === 'niches' && <Niches />}
-        {page === 'ledger' && <Ledger />}
-        {page === 'runs' && <Runs />}
-        {page === 'digest' && <Digest />}
+        {page === 'activity' && <Runs />}
       </main>
     </div>
   );

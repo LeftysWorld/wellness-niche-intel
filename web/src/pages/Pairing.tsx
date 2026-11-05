@@ -109,6 +109,9 @@ export function PairingPage({ id }: { id: string }) {
 
   return (
     <>
+      <p>
+        <a href="#results">← All results</a>
+      </p>
       <Section
         title={`${p.niches?.name} · ${p.locations?.name}`}
         actions={

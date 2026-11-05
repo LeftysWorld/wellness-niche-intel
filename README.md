@@ -48,20 +48,23 @@ Each agent has a token budget and a search budget (`settings.budgets`); a run th
 
 ## Setup
 
-The Supabase project, schema, seed data, Vault secrets, schedules and the `api` function are already in place for project `tocukdtdeyarswmngjic`. What's left is yours:
+Supabase holds the database, the AI agents and the schedules. Vercel only hosts the web app.
 
-1. **Add the API keys** (Supabase dashboard → Edge Functions → Secrets). Nobody else needs to see them.
-   - `ANTHROPIC_API_KEY`
-   - `TAVILY_API_KEY` — or set `SEARCH_PROVIDER=brave` and `BRAVE_API_KEY`
-2. **Allow your sign-in redirect** (Authentication → URL Configuration): add `http://localhost:5173` and wherever you host the dashboard.
-3. **Run the dashboard**
-   ```bash
-   cd web
-   cp .env.example .env.local   # values are public (URL + publishable key)
-   npm install && npm run dev
-   ```
-   Sign in with `robbyseck@gmail.com` (the only address in `app_users`).
-4. **First run**, from the dashboard: Niches → *Daily discovery*; Ledger → *Scout this location* for any location with gaps; Rankings → *Run fit screen*; then approve pairings in the Review queue. The hourly tick analyses approved pairings one at a time (or press *Analyse now*).
+**Secrets live in Supabase, never in Vercel.** `ANTHROPIC_API_KEY` and `TAVILY_API_KEY` (or `SEARCH_PROVIDER=brave` + `BRAVE_API_KEY`) go under Supabase → Edge Functions → Secrets, because that's where the agents run. The web app runs in the browser, so anything given to it is public. It only gets the Supabase URL and the publishable key, both safe to expose.
+
+**Signing in.** One owner account, one password, no email:
+1. Supabase → Authentication → Users → *Add user* → *Create new user*.
+2. Email `owner@wellness-niche-intel.app`, a password of your choice, and tick **Auto Confirm User**. No email is sent.
+3. Sign in to the web app with that password.
+
+Only addresses in `app_users` can read data or run agents. Anyone else who signs up sees nothing.
+
+**Web app** (deployed on Vercel from `web/`, redeploys on every push to `main`). To run it locally:
+```bash
+cd web && cp .env.example .env.local && npm install && npm run dev
+```
+
+**First run**, from the app: Activity → *Update location data* (repeat until locations are filled), *Find new businesses*, then Results → *Run fit screen*, and approve the matches you like under To review. Approved matches are analysed hourly, or press *Analyse now* on a match.
 
 ### Recreating it on a new project
 ```bash
