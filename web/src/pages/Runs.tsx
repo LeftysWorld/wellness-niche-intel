@@ -92,7 +92,12 @@ export function Runs() {
       return { ...r, cost: c, total: c.ai + c.search };
     });
     const day = Date.now() - 86_400_000;
-    const failures = (runs.data ?? []).filter((r) => ['failed', 'budget_exceeded'].includes(r.status) && Date.parse(r.started_at) > day);
+    // Only failures that are still open: no run of the same kind has succeeded since.
+    const lastOk = new Map<string, number>();
+    for (const r of runs.data ?? []) if (r.status === 'succeeded') lastOk.set(r.kind, Math.max(lastOk.get(r.kind) ?? 0, Date.parse(r.started_at)));
+    const failures = (runs.data ?? []).filter(
+      (r) => ['failed', 'budget_exceeded'].includes(r.status) && Date.parse(r.started_at) > day && Date.parse(r.started_at) > (lastOk.get(r.kind) ?? 0),
+    );
     return {
       runs: runRows,
       prices,
@@ -137,7 +142,7 @@ export function Runs() {
     <FilterLayout panel={f.panel} active={f.active}>
       {data && data.failures.length > 0 && (
         <div className="banner err">
-          <b>{data.failures.length} run{data.failures.length === 1 ? '' : 's'} failed or hit a budget in the last 24 hours.</b> Latest:{' '}
+          <b>{data.failures.length} run{data.failures.length === 1 ? '' : 's'} failed or hit a budget in the last 24 hours with no successful run of that kind since.</b> Latest:{' '}
           {data.failures[0].kind.replace('_', ' ')} — {data.failures[0].error}
         </div>
       )}
