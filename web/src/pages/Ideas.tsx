@@ -1,75 +1,120 @@
 import { useState } from 'react';
 import { callAgent, supabase, usd } from '../supabase.ts';
-import { Err, Loading, RunButton, Section, useLoad } from '../ui.tsx';
+import { Err, EvidenceBadge, Loading, RunButton, Section, useLoad } from '../ui.tsx';
 
 // A business idea = one niche run in one place, with the engine's numbers.
 const STATUS: Record<string, string> = {
-  candidate: 'New',
-  awaiting_approval: 'Waiting for you',
+  candidate: 'Screened',
   approved: 'Queued for full analysis',
   analyzed: 'Analysed',
   verified: 'Analysed and checked',
-  screened_out: 'Weaker match',
+  screened_out: 'Ruled out',
   rejected: 'Rejected',
 };
 
-export function Ideas() {
-  const [showWeak, setShowWeak] = useState(false);
-  const [favOnly, setFavOnly] = useState(false);
-  const { data, error, reload } = useLoad(async () => {
-    const statuses = ['verified', 'analyzed', 'approved', 'awaiting_approval', 'candidate', ...(showWeak ? ['screened_out'] : [])];
-    const { data, error } = await supabase
-      .from('pairings')
-      .select(
-        'id,status,score_total,scores,rough_profit_year3,hard_filter_reasons,niches(name,card,favorite),locations(id,name,country_code,favorite,fit),analysis_results!pairings_latest_result_fk(result,verifier_status,confidence)',
-      )
-      .in('status', statuses)
-      .order('score_total', { ascending: false, nullsFirst: false })
-      .limit(150);
-    if (error) throw error;
-    return data ?? [];
-  }, [showWeak]);
+const PART_LABELS: Record<string, string> = {
+  money: 'Year-1 take-home vs target',
+  growth: 'Year-3 take-home vs target',
+  capital: 'Fundable',
+  workload: 'Workload',
+  demand: 'Demand evidence',
+  place: 'Place match',
+  visa: 'Residency',
+  risk: 'Country risk',
+  evidence: 'Sourced data',
+};
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const ideas = (data ?? []).filter((p: any) => !favOnly || p.locations?.favorite || p.niches?.favorite);
+type Sort = 'money' | 'score';
+
+export function Ideas() {
+  const [sort, setSort] = useState<Sort>('money');
+  const [showOut, setShowOut] = useState(false);
+  const [onlyUsed, setOnlyUsed] = useState(false);
+  const [favOnly, setFavOnly] = useState(false);
+  const [open, setOpen] = useState<string | null>(null);
+  const { data, error, reload } = useLoad(async () => {
+    const statuses = ['verified', 'analyzed', 'approved', 'candidate', ...(showOut ? ['screened_out'] : [])];
+    const [pairings, profile] = await Promise.all([
+      supabase
+        .from('pairings')
+        .select('id,status,score_total,scores,hard_filter_reasons,niches(name,status,card,favorite),locations(id,name,favorite,fit),analysis_results!pairings_latest_result_fk(result,verifier_status,confidence)')
+        .in('status', statuses)
+        .limit(400),
+      supabase.from('parameter_profiles').select('params').eq('is_default', true).single(),
+    ]);
+    if (pairings.error) throw pairings.error;
+    return { rows: pairings.data ?? [], params: profile.data?.params ?? {} };
+  }, [showOut]);
 
   async function approve(id: string) {
     await supabase.from('pairings').update({ status: 'approved' }).eq('id', id);
-    await supabase.from('review_queue').update({ status: 'approved', decided_at: new Date().toISOString() }).eq('item_type', 'shortlist').eq('item_id', id).eq('status', 'pending');
     reload();
   }
 
+  const target = Number(data?.params?.target_monthly_profit_usd ?? 5000);
+  const afterTax = (data?.params?.target_basis ?? 'after_tax') !== 'pre_tax';
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const view = (p: any) => {
+    const r = p.analysis_results?.result;
+    const sc = p.scores ?? {};
+    const fig = (s: any) => (s ? (afterTax ? s.takeHome : s.profit) : null);
+    return {
+      y1: fig(r?.year1)?.p50 ?? sc.target_year_figure ?? null,
+      y1Range: fig(r?.year1) ?? sc.target_year_range ?? null,
+      y3: fig(r?.year3)?.p50 ?? sc.year3_figure ?? null,
+      fundable: r?.startup?.fundable ?? sc.fundable ?? false,
+      fundingNote: r?.startup?.fundingNote ?? sc.funding_note,
+      cash: r?.startup?.cashNeeded?.p50 ?? sc.cash_needed_p50,
+      months: r?.startup?.preOpeningMonthsP50 ?? sc.pre_opening_months,
+      tenure: r?.tenure ?? sc.tenure,
+      help: r?.capacity?.paidHelpHoursP50 ?? sc.paid_help_hours ?? 0,
+      evidence: r?.evidence ?? sc.evidence,
+      site: sc.site_check,
+    };
+  };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const rows = (data?.rows ?? [])
+    .filter((p: any) => !onlyUsed || p.niches?.status === 'approved')
+    .filter((p: any) => !favOnly || p.locations?.favorite || p.niches?.favorite)
+    .map((p: any) => ({ p, v: view(p) }))
+    .sort((a: any, b: any) =>
+      sort === 'score'
+        ? (b.p.score_total ?? -1) - (a.p.score_total ?? -1)
+        : Number(b.v.fundable) - Number(a.v.fundable) || (b.v.y1 ?? -1e9) - (a.v.y1 ?? -1e9) || (b.v.y3 ?? -1e9) - (a.v.y3 ?? -1e9),
+    );
+
   return (
-    <Section
-      title="Business ideas"
-      actions={<RunButton label="Re-rank ideas" action={() => callAgent('fit-screen')} onDone={reload} />}
-    >
+    <Section title="Business ideas" actions={<RunButton label="Re-rank ideas" action={() => callAgent('fit-screen')} onDone={reload} />}>
       <p className="muted small">
-        Each idea is one niche in one of your places, ranked by how well it fits your goals, money and description of a place. Approve an idea to get a full analysis with
-        sourced local prices.
+        Every written-up niche in every place you keep. Money figures are monthly averages for the first and third year after opening,{' '}
+        {afterTax ? 'after estimated income tax' : 'before income tax'}, after loan payments and a repair reserve. Your target: {usd(target)}/month.
       </p>
       <div className="filters">
         <label>
-          <input type="checkbox" checked={favOnly} onChange={(e) => setFavOnly(e.target.checked)} /> Only starred places or niches
+          Sort by{' '}
+          <select value={sort} onChange={(e) => setSort(e.target.value as Sort)}>
+            <option value="money">Money (fundable first)</option>
+            <option value="score">Overall fit score</option>
+          </select>
         </label>
         <label>
-          <input type="checkbox" checked={showWeak} onChange={(e) => setShowWeak(e.target.checked)} /> Show weaker matches
+          <input type="checkbox" checked={onlyUsed} onChange={(e) => setOnlyUsed(e.target.checked)} /> Only niches I'm using
+        </label>
+        <label>
+          <input type="checkbox" checked={favOnly} onChange={(e) => setFavOnly(e.target.checked)} /> Only starred
+        </label>
+        <label>
+          <input type="checkbox" checked={showOut} onChange={(e) => setShowOut(e.target.checked)} /> Show ruled-out
         </label>
       </div>
       <Err error={error} />
       {!data ? (
         <Loading />
-      ) : ideas.length === 0 ? (
-        <p className="muted">No ideas yet. Approve some niches and add places, then press Re-rank ideas.</p>
+      ) : rows.length === 0 ? (
+        <p className="muted">No ideas yet. Write up some niches, add places, then press Re-rank ideas.</p>
       ) : (
         <div className="cards">
-          {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
-          {ideas.map((p: any) => {
-            const r = p.analysis_results?.result;
-            const tenure = r?.tenure ?? p.scores?.tenure;
-            const startup = r?.startup?.total?.p50 ?? p.scores?.startup_p50;
-            const y1 = r?.month12?.profit?.p50 ?? p.scores?.target_year_profit_p50;
-            const y3 = r?.month36?.profit?.p50 ?? p.rough_profit_year3;
+          {rows.map(({ p, v }: any) => {
             const card = p.niches?.card ?? {};
             return (
               <article key={p.id} className="idea">
@@ -80,34 +125,61 @@ export function Ideas() {
                     </a>
                     {p.locations?.favorite && <span title="Starred place"> ★</span>}
                   </h3>
-                  <span className="score" title="Overall fit, 0–10">
+                  <span className="score" title="Overall fit score, 0-10">
                     {p.score_total ?? '—'}
                   </span>
                 </header>
+                <div className="chips">
+                  {p.niches?.status === 'proposed' && <span className="pill">new niche</span>}
+                  <EvidenceBadge evidence={v.evidence} />
+                  {v.site?.verdict === 'unknown' && <span className="pill warn" title={v.site.reason}>site: check</span>}
+                </div>
                 <p className="small">{card.unique_angle ?? card.summary ?? card.structures}</p>
                 <div className="nums">
                   <div>
-                    <small>Start-up</small>
-                    <b>{usd(startup)}</b>
-                  </div>
-                  <div>
                     <small>Year 1 /mo</small>
-                    <b className={(y1 ?? 0) >= 0 ? '' : 'err'}>{usd(y1)}</b>
+                    <b className={(v.y1 ?? 0) >= target ? 'ok' : (v.y1 ?? 0) < 0 ? 'err' : ''}>{usd(v.y1)}</b>
+                    {v.y1Range && (
+                      <small className="muted">
+                        {usd(v.y1Range.p10)} to {usd(v.y1Range.p90)}
+                      </small>
+                    )}
                   </div>
                   <div>
                     <small>Year 3 /mo</small>
-                    <b className={(y3 ?? 0) >= 0 ? '' : 'err'}>{usd(y3)}</b>
+                    <b className={(v.y3 ?? 0) < 0 ? 'err' : ''}>{usd(v.y3)}</b>
+                  </div>
+                  <div>
+                    <small>Your cash</small>
+                    <b className={v.fundable ? '' : 'err'}>{usd(v.cash)}</b>
                   </div>
                 </div>
                 <p className="small">
-                  {tenure === 'own' ? 'Buy land' : tenure === 'lease' ? 'Lease a property' : ''}
-                  {(r?.staffed ?? p.scores?.staffed) === true ? ' · needs paid staff' : (r?.staffed ?? p.scores?.staffed) === false ? ' · you run it solo' : ''}
-                  {p.locations?.fit?.summary && <> · {p.locations.fit.summary}</>}
+                  {v.tenure === 'own' ? 'Buy land' : 'Lease a property'} · {v.months ?? '?'} months to open ·{' '}
+                  {v.help > 0.5 ? `you + ${Math.round(v.help)} h/month paid help` : 'you run it alone'}
                 </p>
+                {!v.fundable && v.fundingNote && <p className="small err">{v.fundingNote}</p>}
+                {p.status === 'screened_out' && <p className="small err">{(p.hard_filter_reasons ?? []).join('; ')}</p>}
+                {open === p.id && p.scores?.parts && (
+                  <table className="small">
+                    <tbody>
+                      {Object.entries(p.scores.parts).map(([k, val]) => (
+                        <tr key={k}>
+                          <td>{PART_LABELS[k] ?? k}</td>
+                          <td>{Math.round(Number(val) * 10) / 10} / 10</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
                 <footer>
                   <span className={`pill ${p.status}`}>{STATUS[p.status] ?? p.status}</span>
-                  {['candidate', 'awaiting_approval', 'screened_out'].includes(p.status) && <button onClick={() => approve(p.id)}>Analyse this idea</button>}
-                  {p.status === 'screened_out' && <small className="muted">{(p.hard_filter_reasons ?? []).join('; ')}</small>}
+                  {p.status === 'candidate' && <button onClick={() => approve(p.id)}>Analyse this idea</button>}
+                  {p.scores?.parts && (
+                    <button className="link muted" onClick={() => setOpen(open === p.id ? null : p.id)}>
+                      {open === p.id ? 'Hide score' : 'Why this score'}
+                    </button>
+                  )}
                 </footer>
               </article>
             );

@@ -1,7 +1,7 @@
 // Web search behind one interface. SEARCH_PROVIDER picks Tavily (default) or
 // Brave; the key comes from TAVILY_API_KEY or BRAVE_API_KEY.
 import { db } from './db.ts';
-import type { Run } from './runs.ts';
+import { checkSpendCaps, noteSpend, type Run } from './runs.ts';
 
 export interface SearchHit {
   url: string;
@@ -13,6 +13,8 @@ export interface SearchHit {
 
 export async function search(run: Run, query: string, maxResults = 8): Promise<SearchHit[]> {
   run.chargeSearch();
+  await checkSpendCaps('searches');
+  noteSpend(0, 1);
   const provider = (Deno.env.get('SEARCH_PROVIDER') ?? 'tavily').toLowerCase();
   const hits = provider === 'brave' ? await brave(query, maxResults) : await tavily(query, maxResults);
   await db().from('spend_log').insert({ run_id: run.id, provider, model: 'search', input_tokens: 0, output_tokens: 0, calls: 1 });

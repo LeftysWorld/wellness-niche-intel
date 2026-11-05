@@ -90,3 +90,14 @@ pre { font-size: 0.75rem; max-height: 320px; overflow: auto; background: var(--b
 textarea { font: inherit; width: 100%; box-sizing: border-box; padding: 0.6rem; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--ink); margin: 0.5rem 0; }
 .add-place { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
 .add-place .grow { flex: 1; min-width: 200px; }
+.chips { display: flex; gap: 0.35rem; flex-wrap: wrap; }
+.pill.warn, .pill.evidence.warn { background: color-mix(in srgb, #d9a53b 30%, transparent); }
+.pill.evidence.bad { background: color-mix(in srgb, var(--err) 22%, transparent); }
+.pill.evidence.ok { background: color-mix(in srgb, var(--ok) 20%, transparent); }
+.banner { border-radius: 8px; padding: 0.6rem 0.8rem; margin-bottom: 1rem; border: 1px solid var(--line); }
+.banner.err { border-color: var(--err); background: color-mix(in srgb, var(--err) 10%, transparent); }
+.banner.warn { border-color: #d9a53b; background: color-mix(in srgb, #d9a53b 12%, transparent); }
+.settings label { display: flex; flex-direction: column; gap: 0.25rem; margin: 0.6rem 0; max-width: 420px; }
+.settings .row { display: flex; gap: 1.5rem; flex-wrap: wrap; }
+.fill { display: inline-flex; gap: 0.25rem; }
+.fill input { width: 7rem; }

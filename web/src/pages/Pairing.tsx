@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { analyze } from '../../../supabase/functions/_shared/engine/index.ts';
 import type { AnalysisResult, BusinessModel, Tri } from '../../../supabase/functions/_shared/engine/types.ts';
 import { callAgent, supabase, usd } from '../supabase.ts';
-import { Err, Loading, RunButton, Section, useLoad } from '../ui.tsx';
+import { Err, EvidenceBadge, Loading, RunButton, Section, useLoad } from '../ui.tsx';
 
 const scale = (t: Tri, k: number): Tri => ({ low: t.low * k, mode: t.mode * k, high: t.high * k });
 const capOcc = (t: Tri, k: number): Tri => ({ low: Math.min(0.95, t.low * k), mode: Math.min(0.95, t.mode * k), high: Math.min(0.95, t.high * k) });
@@ -36,20 +36,21 @@ function applyWhatIf(m: BusinessModel, w: WhatIf): BusinessModel {
 
 function Snapshots({ r }: { r: AnalysisResult }) {
   const rows = [
-    ['Year 1 (month 12)', r.month12],
-    ['Year 3 (month 36)', r.month36],
-    ['Year 5 (month 60)', r.month60],
+    ['Year 1', r.year1],
+    ['Year 3', r.year3],
+    ['Year 5', r.year5],
   ] as const;
   return (
     <table>
       <thead>
         <tr>
-          <th>Monthly</th>
-          <th>Revenue P50</th>
-          <th>Costs P50</th>
-          <th>Profit P10</th>
-          <th>Profit P50</th>
-          <th>Profit P90</th>
+          <th>Monthly average after opening</th>
+          <th>Revenue</th>
+          <th>Costs incl. loan</th>
+          <th>Profit before tax</th>
+          <th>Take-home: bad case (P10)</th>
+          <th>Take-home: middle</th>
+          <th>Take-home: good case (P90)</th>
         </tr>
       </thead>
       <tbody>
@@ -58,11 +59,12 @@ function Snapshots({ r }: { r: AnalysisResult }) {
             <td>{label}</td>
             <td>{usd(s.revenue.p50)}</td>
             <td>{usd(s.costs.p50)}</td>
-            <td>{usd(s.profit.p10)}</td>
+            <td>{usd(s.profit.p50)}</td>
+            <td>{usd(s.takeHome.p10)}</td>
             <td>
-              <strong>{usd(s.profit.p50)}</strong>
+              <strong>{usd(s.takeHome.p50)}</strong>
             </td>
-            <td>{usd(s.profit.p90)}</td>
+            <td>{usd(s.takeHome.p90)}</td>
           </tr>
         ))}
       </tbody>
@@ -98,13 +100,14 @@ export function PairingPage({ id }: { id: string }) {
   const [w, setW] = useState<WhatIf>({ price: 1, occupancy: 1, fixed: 1, staffing: 1, startup: 1 });
   const model: BusinessModel | null = data?.p.analysis_results?.model ?? null;
   const changed = Object.values(w).some((v) => v !== 1);
-  const whatIf = useMemo(() => (model && changed ? analyze(applyWhatIf(model, w), { simulations: 500, seed: 42 }) : null), [model, changed, w]);
+  const whatIf = useMemo(() => (model && changed ? analyze(applyWhatIf(model, w), { simulations: 500, seed: 42, sensitivity: false }) : null), [model, changed, w]);
 
   if (error) return <Err error={error} />;
   if (!data) return <Loading />;
   const { p, assumptions } = data;
   const ar = p.analysis_results;
-  const r: (AnalysisResult & { tenure?: string; missing?: string[] }) | null = ar?.result ?? null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const r: (AnalysisResult & { tenure?: string; missing?: string[]; evidence?: any }) | null = ar?.result?.year1 ? ar.result : null;
   const target = Number(p.parameter_profiles?.params?.target_monthly_profit_usd ?? 5000);
 
   return (
@@ -116,7 +119,7 @@ export function PairingPage({ id }: { id: string }) {
         title={`${p.niches?.name} · ${p.locations?.name}`}
         actions={
           <>
-            {p.status === 'awaiting_approval' && (
+            {p.status === 'candidate' && (
               <RunButton label="Approve for analysis" action={async () => supabase.from('pairings').update({ status: 'approved' }).eq('id', id)} onDone={reload} />
             )}
             {['approved', 'analyzed', 'verified'].includes(p.status) && <RunButton label="Analyse now" action={() => callAgent('analyze-pairing', { pairing_id: id })} onDone={reload} />}
@@ -133,34 +136,59 @@ export function PairingPage({ id }: { id: string }) {
           )}
         </p>
         {!r ? (
-          <p className="muted">Not analysed yet. {p.status === 'awaiting_approval' ? 'Approve it to queue a full analysis.' : ''}</p>
+          <p className="muted">
+            {ar ? 'This analysis was made with an older version of the calculator. Press Analyse now to redo it.' : 'Not analysed yet. Press Analyse this idea on the Business ideas page to queue a full analysis.'}
+          </p>
         ) : (
           <>
+            <div className="chips">
+              <EvidenceBadge evidence={r.evidence} />
+            </div>
             <div className="kpis">
               <div>
-                <small>Startup (P50)</small>
-                <b>{usd(r.startup.total.p50)}</b>
+                <small>Your cash needed (middle case)</small>
+                <b className={r.startup.fundable ? '' : 'err'}>{usd(r.startup.cashNeeded.p50)}</b>
                 <small>{r.startup.fundingNote}</small>
               </div>
               <div>
-                <small>Year-1 profit/mo vs ${target.toLocaleString()} goal</small>
-                <b className={r.month12.profit.p50 >= target ? 'ok' : 'err'}>{usd(r.month12.profit.p50)}</b>
+                <small>Project cost</small>
+                <b>{usd(r.startup.total.p50)}</b>
+                <small>{r.startup.loanAmountP50 > 0 ? `loan ${usd(r.startup.loanAmountP50)}, ${usd(r.startup.monthlyDebtPaymentP50)}/month` : 'no loan'}</small>
               </div>
               <div>
-                <small>Break-even month</small>
-                <b>{r.breakEvenMonthP50 ?? 'not within 5 years'}</b>
+                <small>Time to open</small>
+                <b>{r.startup.preOpeningMonthsP50} months</b>
+                <small>costs {usd(r.startup.preOpeningCostP50)} before opening</small>
               </div>
               <div>
-                <small>Worst realistic cash dip (P10)</small>
-                <b>{usd(r.cashLowPoint.p10)}</b>
+                <small>Year-1 take-home/mo vs ${target.toLocaleString()} goal</small>
+                <b className={r.year1.takeHome.p50 >= target ? 'ok' : 'err'}>{usd(r.year1.takeHome.p50)}</b>
+              </div>
+              <div>
+                <small>Your hours</small>
+                <b>{r.capacity.needsHelp ? `${r.capacity.limit} + help` : `${r.capacity.peakOwnerHoursP50}/month`}</b>
+                <small>{r.capacity.needsHelp ? `${r.capacity.paidHelpHoursP50} h/month paid help, ${usd(r.capacity.paidHelpCostP50)}/month` : 'you run it alone'}</small>
+              </div>
+              {r.lender.applies && (
+                <div>
+                  <small>Lender test</small>
+                  <b className={r.lender.bankable ? 'ok' : 'err'}>{r.lender.bankable ? 'Passes' : 'Fails'}</b>
+                  <small>{r.lender.note}</small>
+                </div>
+              )}
+              <div>
+                <small>Take-home turns positive</small>
+                <b>{r.breakEvenMonthP50 ? `month ${r.breakEvenMonthP50}` : 'not within 5 years'}</b>
+                <small>after opening</small>
               </div>
               {r.valuation.map((v) => (
                 <div key={v.year}>
                   <small>
-                    Sale year {v.year} ({v.method})
+                    Sale at year {v.year}
+                    {v.propertyValueP50 > 0 ? ' (business + property)' : ''}
                   </small>
                   <b>{usd(v.price.p50)}</b>
-                  <small>net {usd(v.netProceeds.p50)}</small>
+                  <small>you keep {usd(v.netProceeds.p50)}</small>
                 </div>
               ))}
             </div>
@@ -189,7 +217,7 @@ export function PairingPage({ id }: { id: string }) {
           {whatIf && (
             <>
               <p>
-                Startup {usd(whatIf.startup.total.p50)} · break-even month {whatIf.breakEvenMonthP50 ?? '—'} · year-5 sale {usd(whatIf.valuation.at(-1)?.price.p50)}
+                Your cash {usd(whatIf.startup.cashNeeded.p50)} · take-home positive from month {whatIf.breakEvenMonthP50 ?? '—'} · year-5 sale {usd(whatIf.valuation.at(-1)?.price.p50)}
               </p>
               <Snapshots r={whatIf} />
             </>
@@ -198,7 +226,7 @@ export function PairingPage({ id }: { id: string }) {
       )}
 
       {r && (
-        <Section title="Biggest swings (year-3 monthly profit)">
+        <Section title="Biggest swings (year-3 monthly profit before tax)">
           <table>
             <tbody>
               {r.sensitivity.map((s) => (
@@ -225,7 +253,7 @@ export function PairingPage({ id }: { id: string }) {
                 <td>{usd(r.startup.contingencyP50)}</td>
               </tr>
               <tr>
-                <td>Working capital</td>
+                <td>Opening buffer (3 months of running costs)</td>
                 <td>{usd(r.startup.workingCapitalP50)}</td>
               </tr>
             </tbody>

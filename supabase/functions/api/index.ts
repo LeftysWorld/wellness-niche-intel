@@ -10,6 +10,7 @@ import { run as locationIdeas } from '../location-ideas/handler.ts';
 import { run as locationScout } from '../location-scout/handler.ts';
 import { run as nicheDiscovery } from '../niche-discovery/handler.ts';
 import { run as orchestrator } from '../orchestrator/handler.ts';
+import { run as siteCheck } from '../site-check/handler.ts';
 import { run as verifier } from '../verifier/handler.ts';
 
 const routes: Record<string, (body: Record<string, unknown>) => Promise<unknown>> = {
@@ -21,12 +22,17 @@ const routes: Record<string, (body: Record<string, unknown>) => Promise<unknown>
   'location-scout': locationScout,
   'niche-discovery': nicheDiscovery,
   orchestrator,
+  'site-check': siteCheck,
   verifier,
 };
+
+// When deployed from a pinned GitHub commit, the commit is part of this module's URL.
+const VERSION = import.meta.url.match(/\/([0-9a-f]{40})\//)?.[1] ?? 'local';
 
 Deno.serve(
   handler(async (body, req) => {
     const name = new URL(req.url).pathname.split('/').filter(Boolean).pop() ?? '';
+    if (name === 'version') return { version: VERSION };
     const route = routes[name];
     if (!route) throw new HttpError(404, `Unknown agent "${name}". Use one of: ${Object.keys(routes).join(', ')}`);
     return route(body);

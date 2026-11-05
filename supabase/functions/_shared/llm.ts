@@ -3,7 +3,7 @@
 // JSON matching the schema; nothing is parsed from free-form prose.
 // The API key is read from the ANTHROPIC_API_KEY function secret.
 import { db } from './db.ts';
-import type { Run } from './runs.ts';
+import { checkSpendCaps, noteSpend, type Run } from './runs.ts';
 import { strictSchema } from './schema.ts';
 
 export interface JsonSchema {
@@ -26,6 +26,7 @@ export async function ask<T>(opts: AskOptions): Promise<T> {
   if (!key) throw new Error('ANTHROPIC_API_KEY is not set. Add it under Edge Functions → Secrets.');
   const maxTokens = Math.min(opts.maxTokens ?? 4096, Math.max(512, opts.run.remaining()));
   if (opts.run.remaining() <= 0) await opts.run.charge(1);
+  await checkSpendCaps('tokens');
 
   let lastErr = '';
   // Structured outputs guarantee the reply matches the schema. Very large
@@ -72,6 +73,7 @@ export async function ask<T>(opts: AskOptions): Promise<T> {
       output_tokens: output,
       calls: 1,
     });
+    noteSpend(input + output, 0);
     await opts.run.charge(input + output);
     if (body.stop_reason === 'max_tokens') throw new Error(`Reply was cut off at ${maxTokens} tokens`);
     const raw = (body.content ?? []).filter((c: { type: string }) => c.type === 'text').map((c: { text: string }) => c.text).join('');

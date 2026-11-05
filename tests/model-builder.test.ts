@@ -35,9 +35,10 @@ test('leased Colombia build uses lease items and skips land', () => {
   assert.ok(!out.model.costs.fixed.some((f) => f.key === 'property_tax'));
   assert.equal(out.model.streams[0].price.mode, 275 * 0.65);
   assert.equal(out.model.financing.kind, 'lease');
-  assert.ok(out.missing.length === 0, `missing: ${out.missing}`);
+  // This fixture predates opening hours and income tax, so those two are reported as missing.
+  assert.deepEqual([...out.missing].sort(), ['niche.open_hours', 'tax.income_effective_pct']);
   const r = analyze(out.model, { simulations: 300, seed: 1 });
-  assert.ok(Number.isFinite(r.month60.profit.p50));
+  assert.ok(Number.isFinite(r.year5.profit.p50));
 });
 
 test('owned US build adds land, uses a loan, and reports missing keys', () => {
@@ -49,13 +50,11 @@ test('owned US build adds land, uses a loan, and reports missing keys', () => {
   assert.ok(out.model.exit.buildingValue > 0);
 });
 
-test('solo owner gets no paid staff unless asked; staff come back with withStaff', () => {
+test('solo owner gets no fixed staff lines; a team owner gets the niche staff', () => {
   const loc = { slug: 'co-ant-el-retiro', name: 'El Retiro', country_code: 'CO' };
   const solo = buildModel({ niche, template: data.template, location: loc, ledger: colombia, profile: { ...profile, operator_model: 'solo' }, tenure: 'lease' });
   assert.equal(solo.model.costs.staffing.length, 0);
-  assert.equal(solo.staffed, false);
-  const staffed = buildModel({ niche, template: data.template, location: loc, ledger: colombia, profile: { ...profile, operator_model: 'solo' }, tenure: 'lease', withStaff: true });
-  assert.ok(staffed.model.costs.staffing.length > 0);
+  assert.ok(solo.model.costs.hourlyWage);
   const team = buildModel({ niche, template: data.template, location: loc, ledger: colombia, profile: { ...profile, operator_model: 'team' }, tenure: 'lease' });
   assert.ok(team.model.costs.staffing.length > 0);
 });
@@ -66,4 +65,63 @@ test('a niche rent line is dropped so the lease is counted once', () => {
   const rentLines = out.model.costs.fixed.filter((f) => /lease|rent/i.test(`${f.key} ${f.label}`));
   assert.equal(rentLines.length, 1);
   assert.equal(rentLines[0].key, 'lease');
+});
+
+test('lease follows the kind of site the niche needs, flagged when estimated', () => {
+  const base = { niche: { ...niche, model: { ...niche.model, siteType: 'commercial' as const } }, template: data.template, location: { slug: 'x', name: 'x', country_code: 'CO' }, profile, tenure: 'lease' as const };
+  const guessed = buildModel({ ...base, ledger: colombia });
+  assert.ok(guessed.missing.includes('lease.commercial_monthly_usd'));
+  assert.equal(guessed.model.costs.fixed[0].amount.mode, 3195 * 1.4);
+  const withCommercial = mergeLedger([{ scope: 'country', rows: [...colombia.values()] }, { scope: 'micro_area', rows: [row('lease.commercial_monthly_usd', 5000)] }]);
+  const sourced = buildModel({ ...base, ledger: withCommercial });
+  assert.equal(sourced.model.costs.fixed[0].amount.mode, 5000);
+  assert.equal(sourced.model.exit.marketRentMonthly, 5000);
+});
+
+test('local streams follow population; destination streams follow traveller demand and prices', () => {
+  const model = { ...niche.model, streams: niche.model.streams.map((s: any, i: number) => ({ ...s, market: i === 0 ? 'local' : 'destination' })) };
+  const small = mergeLedger([{ scope: 'country', rows: [...colombia.values(), row('demand.population_40min', 40000), row('price.index_destination', 0.9)] }]);
+  const out = buildModel({ niche: { ...niche, model }, template: data.template, location: { slug: 'x', name: 'x', country_code: 'CO' }, ledger: small, profile, tenure: 'lease' });
+  // sqrt(40k / 400k) = 0.316 local demand factor.
+  assert.ok(Math.abs(out.model.streams[0].matureOccupancy.mode - niche.model.streams[0].matureOccupancy.mode * Math.sqrt(0.1)) < 1e-6);
+  assert.equal(out.model.streams[0].market, 'local');
+  assert.equal(out.model.streams[1].price.mode, niche.model.streams[1].price.mode * 0.9);
+});
+
+test('a seasonal curve from the place is normalised and applied', () => {
+  const curve = JSON.stringify([2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1]);
+  const l = mergeLedger([{ scope: 'country', rows: [...colombia.values(), { ...row('demand.seasonality', null), value_text: curve }] }]);
+  const out = buildModel({ niche, template: data.template, location: { slug: 'x', name: 'x', country_code: 'CO' }, ledger: l, profile, tenure: 'lease' });
+  const s = out.model.streams[0].seasonality!;
+  assert.equal(s.length, 12);
+  assert.ok(Math.abs(s.reduce((a, b) => a + b, 0) / 12 - 1) < 1e-9);
+  assert.ok(s[0] > s[11]);
+});
+
+test('evidence separates sourced values from estimates', () => {
+  const l = mergeLedger([{ scope: 'country', rows: [row('labor.monthly_wage_usd', 900), row('price.index', 0.6, { written_by: 'seed:estimate', source_url: null })] }]);
+  const out = buildModel({ niche, template: data.template, location: { slug: 'x', name: 'x', country_code: 'CO' }, ledger: l, profile, tenure: 'lease' });
+  assert.ok(out.evidence.sourced.includes('labor.monthly_wage_usd'));
+  assert.ok(out.evidence.guessed.includes('price.index'));
+  assert.ok(out.evidence.missing.includes('lease.finca_monthly_usd'));
+  assert.ok(out.evidence.sourcedShare > 0 && out.evidence.sourcedShare < 1);
+});
+
+test('solo owners pay for opening hours beyond their limit by the hour', () => {
+  const busy = { ...niche, model: { ...niche.model, openHoursPerMonth: 300 } };
+  const out = buildModel({ niche: busy, template: data.template, location: { slug: 'x', name: 'x', country_code: 'CO' }, ledger: colombia, profile: { ...profile, operator_model: 'solo', owner_hours_per_month: 220 }, tenure: 'lease' });
+  const r = analyze(out.model, { simulations: 200, sensitivity: false });
+  assert.ok(r.capacity.needsHelp);
+  assert.ok(r.capacity.paidHelpHoursP50 >= 300 + niche.model.ownerFixedHours - 220);
+  assert.ok(r.capacity.paidHelpCostP50 > 0);
+});
+
+test('a loan includes a build period with interest and a lender test', () => {
+  const us = mergeLedger([{ scope: 'country', rows: [row('labor.monthly_wage_usd', 2800), row('finance.rate_pct', 8.5), row('finance.min_equity_pct', 0.2), row('land.price_per_acre_usd', 16000)] }]);
+  const out = buildModel({ niche, template: data.template, location: { slug: 'x', name: 'x', country_code: 'US' }, ledger: us, profile: { ...profile, financing_allowed: ['sba'] }, tenure: 'own' });
+  assert.equal(out.model.financing.minEquityPct, 0.25, 'start-ups need at least 25% equity');
+  const r = analyze(out.model, { simulations: 200, sensitivity: false });
+  assert.ok(r.startup.preOpeningMonthsP50 >= 6);
+  assert.equal(r.lender.applies, true);
+  assert.equal(r.lender.bankable, (r.lender.dscrP50 ?? 0) >= 1.25);
 });

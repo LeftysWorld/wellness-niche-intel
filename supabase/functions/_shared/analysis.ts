@@ -102,7 +102,9 @@ export async function analyzePairing(run: Run, pairingId: string, opts: { resear
   }
 
   const [best, alt] = await evaluate(niche, location, profile, { simulations: th.simulations, pairingId });
-  const weak = best.build.weakInputs.length + best.build.missing.length;
+  const ev = best.build.evidence;
+  // Confidence follows how much is sourced, not just how much is missing.
+  const confidence = ev.sourcedShare >= 0.7 && !ev.nicheGuessed && ev.missing.length === 0 ? 'high' : ev.sourcedShare >= 0.4 ? 'medium' : 'low';
   const saved = must(
     await db()
       .from('analysis_results')
@@ -110,9 +112,16 @@ export async function analyzePairing(run: Run, pairingId: string, opts: { resear
         run_id: run.id,
         pairing_id: pairingId,
         model: best.build.model,
-        result: { ...best.result, tenure: best.tenure, staffed: best.build.staffed, missing: best.build.missing, weakInputs: best.build.weakInputs, alternative: alt ? { tenure: alt.tenure, month12: alt.result.month12, month36: alt.result.month36, month60: alt.result.month60, startup: alt.result.startup.total } : null },
+        result: {
+          ...best.result,
+          tenure: best.tenure,
+          evidence: ev,
+          missing: best.build.missing,
+          weakInputs: best.build.weakInputs,
+          alternative: alt ? { tenure: alt.tenure, year1: alt.result.year1, year3: alt.result.year3, year5: alt.result.year5, startup: alt.result.startup.total, fundable: alt.result.startup.fundable } : null,
+        },
         assumption_ids: best.build.usedAssumptionIds,
-        confidence: weak > 4 ? 'low' : weak > 1 ? 'medium' : 'high',
+        confidence,
         verifier_status: 'pending',
       })
       .select('id')
@@ -120,7 +129,7 @@ export async function analyzePairing(run: Run, pairingId: string, opts: { resear
     'save result',
   );
   run.assumptionIds.push(...best.build.usedAssumptionIds);
-  await db().from('pairings').update({ status: 'analyzed', latest_result_id: saved.id, rough_profit_year3: best.result.month36.profit.p50 }).eq('id', pairingId);
+  await db().from('pairings').update({ status: 'analyzed', latest_result_id: saved.id, rough_profit_year3: best.result.year3.takeHome.p50 }).eq('id', pairingId);
 
   let verification: Awaited<ReturnType<typeof verifyResult>> | null = null;
   if (opts.verify) verification = await verifyResult(run, saved.id);
@@ -128,7 +137,7 @@ export async function analyzePairing(run: Run, pairingId: string, opts: { resear
     resultId: saved.id,
     tenure: best.tenure,
     researchedValues: researched.length,
-    profitP50: { m12: best.result.month12.profit.p50, m36: best.result.month36.profit.p50, m60: best.result.month60.profit.p50 },
+    takeHomeP50: { year1: best.result.year1.takeHome.p50, year3: best.result.year3.takeHome.p50, year5: best.result.year5.takeHome.p50 },
     startupP50: best.result.startup.total.p50,
     verifier: verification?.status ?? 'skipped',
   };

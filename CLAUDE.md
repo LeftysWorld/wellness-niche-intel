@@ -6,4 +6,7 @@
 - Every agent works inside `withRun()` and calls the model only through `ask()` (structured outputs: a JSON schema the reply must match, tokens logged to `spend_log`, budget enforced). Only write values whose `source_url` came back in that run's search results.
 - New agents: add `supabase/functions/<name>/handler.ts` exporting `run(body)`, register it in `api/index.ts`, and schedule it with `private.invoke('<name>', ...)` in a migration.
 - Edge function auth is custom (`_shared/auth.ts`); deploy with JWT verification off.
-- Run `npm test` and `npm run typecheck:functions` before committing.
+- Run `scripts/check.sh` before committing, and `scripts/sql_tests.sql` against the project after any migration.
+- Name a new migration file with the version the live history assigns, so repo and database match.
+- Money results are monthly averages per operating year (`year1/3/5`), after loan payments; `takeHome` is after estimated income tax. Never report a single month as "year 1".
+- Every number shown to the owner carries where it came from (sourced vs estimate); keep `evidence` flowing from the model builder to the UI.

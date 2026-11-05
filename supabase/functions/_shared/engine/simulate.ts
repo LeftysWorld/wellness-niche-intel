@@ -1,5 +1,5 @@
 import type { BusinessModel, Tri } from './types.ts';
-import { normalizeTri, sampleTri } from './random.ts';
+import { correlatedU, normal, normalizeTri, sampleTri, triFromU } from './random.ts';
 
 /** Every uncertain input resolved to one concrete value for a single simulation. */
 export interface Scenario {
@@ -15,21 +15,33 @@ export interface Scenario {
   ebitdaMultiple: number;
   managerMonthlyCost: number;
   landAppreciation: number;
+  reservePct: number;
+  incomeTaxPct: number;
+  hourlyWage: number;
+  preOpeningMonths: number;
 }
 
 type Pick = (t: Tri) => number;
+/** Picks for demand-linked inputs: price and occupancy rise together, ramp-up shortens. */
+interface DemandPick {
+  price: Pick;
+  occupancy: Pick;
+  ramp: Pick;
+}
 
-function resolve(model: BusinessModel, pick: Pick): Scenario {
+function resolve(model: BusinessModel, pick: Pick, demand?: DemandPick): Scenario {
+  const d = demand ?? { price: pick, occupancy: pick, ramp: pick };
+  const zero = { low: 0, mode: 0, high: 0 };
   const perSale: Record<string, number> = {};
   for (const [k, v] of Object.entries(model.costs.perSaleCost)) perSale[k] = pick(v);
   return {
     startupLines: model.startupCosts.map((c) => pick(c.amount)),
     contingencyPct: pick(model.contingencyPct),
     streams: model.streams.map((s) => ({
-      price: pick(s.price),
-      start: clamp01(pick(s.startOccupancy)),
-      mature: clamp01(pick(s.matureOccupancy)),
-      monthsToMature: Math.max(1, pick(s.monthsToMature)),
+      price: d.price(s.price),
+      start: clamp01(d.occupancy(s.startOccupancy)),
+      mature: clamp01(d.occupancy(s.matureOccupancy)),
+      monthsToMature: Math.max(1, d.ramp(s.monthsToMature)),
     })),
     fixed: model.costs.fixed.map((c) => pick(c.amount)),
     staffing: model.costs.staffing.map((c) => pick(c.amount)),
@@ -40,11 +52,26 @@ function resolve(model: BusinessModel, pick: Pick): Scenario {
     ebitdaMultiple: pick(model.exit.ebitdaMultiple),
     managerMonthlyCost: pick(model.exit.managerMonthlyCost),
     landAppreciation: pick(model.exit.landAppreciation),
+    reservePct: pick(model.costs.reservePctOfRevenue ?? zero),
+    incomeTaxPct: pick(model.costs.incomeTaxPct ?? zero),
+    hourlyWage: pick(model.costs.hourlyWage ?? zero),
+    preOpeningMonths: Math.max(0, Math.round(pick(model.preOpening?.months ?? zero))),
   };
 }
 
+/** How strongly price, occupancy and ramp-up move with one shared market-demand factor. */
+export const DEMAND_CORRELATION = 0.6;
+
 export function randomScenario(model: BusinessModel, rng: () => number): Scenario {
-  return resolve(model, (t) => sampleTri(t, rng));
+  // One demand factor per scenario: a strong market lifts price and occupancy
+  // together and fills up faster; a weak one does the opposite.
+  const common = normal(rng);
+  const u = () => correlatedU(common, DEMAND_CORRELATION, rng);
+  return resolve(model, (t) => sampleTri(t, rng), {
+    price: (t) => triFromU(t, u()),
+    occupancy: (t) => triFromU(t, u()),
+    ramp: (t) => triFromU(t, 1 - u()),
+  });
 }
 
 /** The most-likely case: every input at its mode. */
@@ -106,17 +133,17 @@ export function fund(model: BusinessModel, sc: Scenario): Funding {
   let equity = total;
   let loan = 0;
   if (f.kind === 'loan') {
-    // The owner injects the lender's minimum equity and keeps the rest of
-    // their cash as a personal reserve; everything else is borrowed.
-    equity = total * (f.minEquityPct ?? 0.1);
+    // The owner injects the lender's minimum equity; everything else is borrowed.
+    equity = total * (f.minEquityPct ?? 0.25);
     loan = total - equity;
   }
   const monthlyPayment = loan > 0 ? amortizedPayment(loan, ratePct, termMonths) : 0;
+  // Owner cash vs equity only; the cash dip and the lender test are added in analyze().
   const fundable = f.ownerCash >= equity;
   const note = fundable
     ? f.kind === 'loan'
-      ? `Owner injects ${pct(f.minEquityPct ?? 0.1)} of project cost; the rest is borrowed.`
-      : 'Owner cash covers the full project cost.'
+      ? `Owner injects ${pct(f.minEquityPct ?? 0.25)} of project cost; the rest is borrowed.`
+      : 'Owner cash covers the project cost.'
     : `Short by about $${Math.round(equity - f.ownerCash).toLocaleString('en-US')} of owner cash.`;
   return { base, contingency, workingCapital, total, equity, loan, monthlyPayment, ratePct, termMonths, fundable, note };
 }
@@ -142,30 +169,53 @@ export function loanBalance(principal: number, ratePct: number, months: number, 
 }
 
 export interface SimulationPath {
+  /** Operating months, starting on opening day. */
   revenue: number[];
   costs: number[];
-  /** Owner profit after debt service, before owner pay and income tax. */
+  /** Owner profit after debt service, before income tax. */
   profit: number[];
+  /** Profit after estimated income tax. */
+  takeHome: number[];
+  /** Operating profit before loan payments and tax (for the lender test and valuation). */
+  operatingProfit: number[];
   debtService: number[];
   ownerHours: number[];
+  /** Hours per month covered by paid help because the owner's limit was reached. */
+  paidHelpHours: number[];
+  paidHelpCost: number[];
+  /** Months before opening, and what they cost (rent, running costs, interest). */
+  preOpeningMonths: number;
+  preOpeningCost: number[];
   funding: Funding;
 }
 
 export function simulate(model: BusinessModel, sc: Scenario): SimulationPath {
   const horizon = model.horizonMonths ?? 60;
+  const pre = sc.preOpeningMonths;
   const startCal = (model.startCalendarMonth ?? 1) - 1;
   const funding = fund(model, sc);
-  const revenue: number[] = [];
-  const costs: number[] = [];
-  const profit: number[] = [];
-  const debtService: number[] = [];
-  const ownerHours: number[] = [];
+  const out: SimulationPath = {
+    revenue: [], costs: [], profit: [], takeHome: [], operatingProfit: [], debtService: [], ownerHours: [],
+    paidHelpHours: [], paidHelpCost: [], preOpeningMonths: pre, preOpeningCost: [], funding,
+  };
 
+  // Before opening: rent in full, a share of other running costs, interest only on any loan.
+  const share = model.preOpening?.fixedShare ?? 0.3;
+  const interestOnly = (funding.loan * funding.ratePct) / 100 / 12;
+  for (let m = 1; m <= pre; m++) {
+    let fixed = 0;
+    model.costs.fixed.forEach((c, i) => {
+      fixed += c.key === 'lease' ? sc.fixed[i] : sc.fixed[i] * share;
+    });
+    out.preOpeningCost.push(fixed + interestOnly);
+  }
+
+  const limit = model.capacity?.ownerHoursPerMonth ?? Infinity;
   for (let m = 1; m <= horizon; m++) {
-    const cal = (startCal + m - 1) % 12;
+    const cal = (startCal + pre + m - 1) % 12;
     let rev = 0;
     let perSaleCost = 0;
-    let hours = model.capacity?.ownerFixedHoursPerMonth ?? 0;
+    let hours = (model.capacity?.ownerFixedHoursPerMonth ?? 0) + (model.capacity?.openHoursPerMonth ?? 0);
     model.streams.forEach((s, i) => {
       const st = sc.streams[i];
       const progress = st.monthsToMature <= 1 ? 1 : Math.min(1, (m - 1) / (st.monthsToMature - 1));
@@ -177,19 +227,29 @@ export function simulate(model: BusinessModel, sc: Scenario): SimulationPath {
       perSaleCost += sold * (sc.perSale[s.key] ?? 0);
       hours += sold * (s.ownerHoursPerSale ?? 0);
     });
+    // Hours beyond what the owner can work are paid for at the hourly wage.
+    const helpHours = Number.isFinite(limit) ? Math.max(0, hours - limit) : 0;
+    const helpCost = helpHours * sc.hourlyWage;
     const debt = m <= funding.termMonths ? funding.monthlyPayment : 0;
-    const cost =
-      fixedCostAt(model, sc, m) +
+    const operating =
+      fixedCostAt(model, sc, pre + m) +
       staffingAt(model, sc, m) +
+      helpCost +
       rev * sc.variablePct +
+      rev * sc.reservePct +
       perSaleCost +
-      rev * sc.revenueTaxPct +
-      debt;
-    revenue.push(rev);
-    costs.push(cost);
-    profit.push(rev - cost);
-    debtService.push(debt);
-    ownerHours.push(hours);
+      rev * sc.revenueTaxPct;
+    const profit = rev - operating - debt;
+    const tax = Math.max(0, profit) * sc.incomeTaxPct;
+    out.revenue.push(rev);
+    out.costs.push(operating + debt);
+    out.operatingProfit.push(rev - operating);
+    out.profit.push(profit);
+    out.takeHome.push(profit - tax);
+    out.debtService.push(debt);
+    out.ownerHours.push(Math.min(hours, limit));
+    out.paidHelpHours.push(helpHours);
+    out.paidHelpCost.push(helpCost);
   }
-  return { revenue, costs, profit, debtService, ownerHours, funding };
+  return out;
 }

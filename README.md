@@ -4,6 +4,8 @@ Finds wellness businesses that depend on land or a structure (dark retreats, bat
 
 **The rule the whole system follows:** AI does research and judgment; code does all the arithmetic; a separate model checks the result.
 
+**What the money figures mean.** "Year 1 /mo" is the average month in the first year *after opening*, after loan payments, a 3% repair reserve and estimated income tax (switch to before-tax in Settings). The build or fit-out period before opening is modelled separately: rent, part of the running costs and loan interest are paid with no revenue. A solo owner works up to their monthly hours (Settings); any opening hours beyond that are paid for by the hour. A loan only counts if profit covers the payment 1.25× in years 1–2 and you put in at least 25%. Every idea shows how much of its data is sourced versus estimated.
+
 ## How it fits together
 
 ```
@@ -14,6 +16,7 @@ discovery-loop   search → classify (Haiku) → de-dupe → example / new niche
 niche-discovery  draft a model card + cost template (Sonnet) → engine smoke test → review queue
 location-scout   fill missing/stale ledger values with sourced numbers (Haiku)
 location-fit     judge each place against your own description (Sonnet)
+site-check       can each place physically host each niche (hot spring, acreage, public use)? (Sonnet)
 location-ideas   suggest new places that match your description (Sonnet)
 fit-screen       every approved niche × your regions → hard filters → quick simulation → score → shortlist
 analyze-pairing  local price research → full 2,000-run simulation → store → verifier
@@ -27,7 +30,8 @@ orchestrator     tick: apply approvals, re-queue pairings hit by changed values,
 | Calculation engine (pure TS, shared by server, browser and tests) | `supabase/functions/_shared/engine/` |
 | Niche card + template + ledger → engine model | `supabase/functions/_shared/model-builder.ts` |
 | Agents | `supabase/functions/<agent>/handler.ts`, routed by `supabase/functions/api/index.ts` |
-| Schema, ledger trigger, RLS, seed, schedules | `supabase/migrations/` |
+| Scoring (money-first ranking, editable weights) | `supabase/functions/_shared/scoring.ts` |
+| Schema, ledger trigger, RLS, seed, schedules | `supabase/migrations/` (file names match the live migration history) |
 | Dashboard (Vite + React) | `web/` |
 | Tests | `tests/` (`npm test`) |
 
@@ -43,11 +47,13 @@ Every number the model uses (land price, lease, wages, taxes, prices, occupancy�
 | discovery, full sweep (4 pages) | Sundays 09:13–09:58 |
 | niche card drafts | Sundays 12:37 |
 | niche brainstorm | 1st of month 12:47 |
+| exchange rates | Sundays 08:47 |
 | place scores vs your description | Mondays 10:47 |
+| site checks | Mondays 10:57 |
 | fit screen | Mondays 11:17 |
 | digest | Mondays 13:33 |
 
-Each agent has a token budget and a search budget (`settings.budgets`); a run that hits it stops and is recorded as `budget_exceeded`.
+Each run has its own token and search budget, and all runs together share daily and monthly caps (`settings.budgets`: 1.5M tokens a day, 15M a month, 60 searches a day, 900 a month, inside Tavily's 1,000 free). A run that hits a cap stops as `budget_exceeded`; the Activity page shows usage against the caps and flags any failures in the last 24 hours. Jobs that must not overlap (analysis, refresh, fit screen, site checks) take a lock, and runs that die mid-way are marked failed after 30 minutes.
 
 ## Setup
 
@@ -84,10 +90,14 @@ supabase secrets set ANTHROPIC_API_KEY=... TAVILY_API_KEY=...
 
 ## Development
 ```bash
-npm test                     # engine + model builder (Node ≥ 22.18, no install needed)
-npm run typecheck:functions  # edge functions, with a small Deno shim
+scripts/check.sh             # tests (engine, builder, scoring, schemas) + function type-check
 ```
-CI also runs `deno check` on the functions and builds the dashboard.
+After any migration, run `scripts/sql_tests.sql` against the project (it rolls back its own writes).
+
+New migrations: apply them, then save the file under the version the live history shows (`list_migrations` / `supabase migration list`) so the repo and the database never drift.
+
+## Deploying
+CI (`.github/workflows/ci.yml`) runs the checks and, on `main`, pushes migrations, deploys the `api` function and smoke-tests it. It needs two repository secrets: `SUPABASE_ACCESS_TOKEN` and `SUPABASE_DB_PASSWORD`. **GitHub Actions is currently refused for this account because of a billing lock; fix that in GitHub → Settings → Billing.** Until then, deploy by hand with `supabase functions deploy api --no-verify-jwt`; the Activity page warns when the live backend is behind GitHub `main`.
 
 Regenerate the seed after editing niche cards or the starting ledger: `python3 scripts/build_seed.py`.
 

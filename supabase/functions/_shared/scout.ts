@@ -2,13 +2,14 @@
 // searching and extracting sourced numbers. Only values with a source URL
 // that came back in the search results are written.
 import { db, getSetting, must, type Models } from './db.ts';
+import { fetchText } from './search.ts';
 import { KEY_GUIDE, REQUIRED_LOCATION_KEYS, writeAssumptions, type LocationRow, type NewAssumption } from './ledger.ts';
 import { ask } from './llm.ts';
 import type { Run } from './runs.ts';
 import { search } from './search.ts';
 
 export async function scoutLocation(run: Run, locationId: string, opts: { keys?: string[]; force?: boolean } = {}) {
-  const models = await getSetting<Models>('models');
+  const models = await getSetting<Models & { numbers?: string }>('models');
   const fx = await getSetting<{ cop_per_usd?: number }>('currency');
   const location = must(await db().from('locations').select('*').eq('id', locationId).single(), 'location') as LocationRow;
   const current = must(
@@ -21,8 +22,14 @@ export async function scoutLocation(run: Run, locationId: string, opts: { keys?:
     return opts.force || !c || c.is_stale || String(c.written_by).includes('estimate');
   });
   // Country-level keys belong on the country; micro-area keys on the micro-area.
-  const countryOnly = new Set(['tax.revenue_pct', 'exit.country_discount', 'labor.monthly_wage_usd', 'finance.rate_pct']);
-  const keys = wanted.filter((k) => location.level === 'country' || !countryOnly.has(k));
+  const countryOnly = new Set(['tax.revenue_pct', 'tax.income_effective_pct', 'exit.country_discount', 'labor.monthly_wage_usd', 'finance.rate_pct']);
+  // Values the scout failed to find twice in the last 60 days wait for the owner instead of costing searches daily.
+  const misses = ((location.profile?.scout_misses ?? {}) as Record<string, { count: number; last: string }>);
+  const backedOff = (k: string) => {
+    const m = misses[k];
+    return !opts.force && m && m.count >= 2 && Date.now() - Date.parse(m.last) < 60 * 86_400_000;
+  };
+  const keys = wanted.filter((k) => (location.level === 'country' ? countryOnly.has(k) : !countryOnly.has(k)) && !backedOff(k));
   if (!keys.length) return { location: location.slug, written: 0, skipped: 'nothing missing or stale' };
 
   const written: string[] = [];
@@ -36,10 +43,11 @@ export async function scoutLocation(run: Run, locationId: string, opts: { keys?:
       skipped.push({ key, reason: 'no search results', note: q });
       continue;
     }
-    type Out = { found: boolean; value: number; low: number; high: number; unit: string; source_index: number; note: string; confidence: 'high' | 'medium' | 'low' };
+    type Out = { found: boolean; value: number; low: number; high: number; unit: string; source_index: number; quote: string; note: string; confidence: 'high' | 'medium' | 'low' };
     const out = await ask<Out>({
       run,
-      model: models.extraction,
+      // Numbers feed the money model directly, so they get the mid-tier model.
+      model: models.numbers ?? models.judgment,
       system: 'You extract one numeric fact from search results with its source. Use numbers stated in the results; you may convert currency and units (e.g. hectares to acres, yearly to monthly) and say so in the note. Give a range across the listings you see. The description of the value is a target, not a filter: if the closest evidence differs (fewer bedrooms, smaller or larger lots, a nearby town), still report it, set confidence to low, and say in the note how it differs and which way it likely biases the number. Set found=false only when nothing in the results is about this value in or near this place.',
       prompt: [
         `Location: ${location.name} (${location.country_code}).`,
@@ -59,10 +67,11 @@ export async function scoutLocation(run: Run, locationId: string, opts: { keys?:
             high: { type: 'number' },
             unit: { type: 'string' },
             source_index: { type: 'integer', description: 'The [n] of the result the value comes from' },
+            quote: { type: 'string', description: 'The exact words from that result that contain the figure, copied character for character' },
             note: { type: 'string' },
             confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
           },
-          required: ['found', 'value', 'low', 'high', 'unit', 'source_index', 'note', 'confidence'],
+          required: ['found', 'value', 'low', 'high', 'unit', 'source_index', 'quote', 'note', 'confidence'],
         },
       },
       maxTokens: 800,
@@ -70,8 +79,16 @@ export async function scoutLocation(run: Run, locationId: string, opts: { keys?:
     const source = hits[out.source_index];
     if (!out.found || !source || !(out.value > 0)) {
       skipped.push({ key, reason: !out.found ? 'not found in results' : !source ? 'bad source index' : 'non-positive value', note: out.note });
+      misses[key] = { count: (misses[key]?.count ?? 0) + 1, last: new Date().toISOString() };
       continue;
     }
+    // Confirm the quoted figure is really on the page (or in the result text).
+    const squash = (t: string) => t.toLowerCase().replace(/\s+/g, ' ').trim();
+    const quote = squash(out.quote ?? '');
+    let confirmed = quote.length >= 6 && squash(`${source.title} ${source.snippet}`).includes(quote);
+    if (!confirmed && quote.length >= 6) confirmed = squash(await fetchText(source.url, 60000)).includes(quote);
+    if (!confirmed) out.confidence = 'low';
+    delete misses[key];
     const row: NewAssumption = {
       subject_type: 'location',
       subject_id: location.id,
@@ -82,12 +99,13 @@ export async function scoutLocation(run: Run, locationId: string, opts: { keys?:
       unit: out.unit,
       currency: key.endsWith('_usd') ? 'USD' : null,
       source_url: source.url,
-      source_note: out.note,
+      source_note: `${out.note}${confirmed ? ` Quote: "${out.quote}"` : ' (figure not confirmed on the page)'}`,
       confidence: out.confidence,
       stale_after: key.startsWith('lease') || key.startsWith('land') ? '120 days' : '365 days',
     };
     written.push(...(await writeAssumptions(run, 'location-scout', [row])));
   }
+  await db().from('locations').update({ profile: { ...(location.profile ?? {}), scout_misses: misses } }).eq('id', location.id);
   return { location: location.slug, asked: keys.length, written: written.length, skipped };
 }
 
@@ -99,6 +117,12 @@ function queryFor(key: string, l: LocationRow): string {
       return es ? `lote rural en venta ${place} precio hectárea` : `land for sale ${place} acres price`;
     case 'lease.finca_monthly_usd':
       return es ? `finca en arriendo ${place} mensual` : `rural house rent monthly ${place} 4 bedroom`;
+    case 'lease.commercial_monthly_usd':
+      return es ? `local comercial en arriendo ${place} rural parqueadero` : `commercial property for lease ${place} rural retail`;
+    case 'lease.estate_monthly_usd':
+      return es ? `finca grande en arriendo ${place} hectáreas` : `estate for rent ${place} acres farm`;
+    case 'tax.income_effective_pct':
+      return es ? `tarifa régimen simple de tributación 2026 servicios` : `self-employment tax and income tax rate small business ${place}`;
     case 'labor.monthly_wage_usd':
       return es ? `salario mínimo ${place} 2026 carga prestacional` : `hospitality worker wage ${place} 2026`;
     case 'tax.revenue_pct':

@@ -36,6 +36,8 @@ export interface Financing {
   ratePct?: number;
   /** Loan term in years. */
   termYears?: number;
+  /** Debt-service coverage a lender requires: operating profit / loan payment. Defaults to 1.25. */
+  minDscr?: number;
 }
 
 export interface RevenueStream extends Provenance {
@@ -57,6 +59,8 @@ export interface RevenueStream extends Provenance {
   seasonality?: number[];
   /** Owner hours needed per unit-period sold (for the capacity check). */
   ownerHoursPerSale?: number;
+  /** Who buys: people living nearby (local) or travellers (destination). Used by the model builder. */
+  market?: 'local' | 'destination';
 }
 
 export interface MonthlyCost extends Provenance {
@@ -80,6 +84,12 @@ export interface OperatingCosts {
   perSaleCost: Record<string, Tri>;
   /** Taxes charged on gross revenue (e.g. simplified regimes), as a share. */
   revenueTaxPct: Tri;
+  /** Repairs and replacement reserve as a share of revenue. */
+  reservePctOfRevenue?: Tri;
+  /** Effective income and self-employment tax on positive monthly profit, as a share. */
+  incomeTaxPct?: Tri;
+  /** Hourly cost of paid help that covers hours beyond the owner's limit (solo operators). */
+  hourlyWage?: Tri;
 }
 
 export interface ExitAssumptions {
@@ -105,6 +115,8 @@ export interface ExitAssumptions {
   ownerDependenceDiscount: number;
   /** Discount for country risk: thin buyer pool, currency, title (0..1). */
   countryDiscount: number;
+  /** Market rent for the site; an owned business is valued as if it paid this, plus the property. */
+  marketRentMonthly?: number;
 }
 
 export interface CapacityLimits {
@@ -112,6 +124,15 @@ export interface CapacityLimits {
   ownerHoursPerMonth: number;
   /** Fixed owner hours per month (admin, marketing, maintenance). */
   ownerFixedHoursPerMonth: number;
+  /** Hours per month someone must be on site because the business is open. */
+  openHoursPerMonth?: number;
+}
+
+export interface PreOpening {
+  /** Months from start of build or fit-out to opening day. */
+  months: Tri;
+  /** Share of non-rent fixed costs paid while not yet open (insurance, utilities). */
+  fixedShare: number;
 }
 
 export interface BusinessModel {
@@ -120,14 +141,16 @@ export interface BusinessModel {
   startupCosts: CostLine[];
   /** Contingency as a share of startup costs. */
   contingencyPct: Tri;
-  /** Months of fixed costs to hold as opening cash. */
+  /** Months of fixed costs held as an opening buffer (the cash dip is added on top). */
   workingCapitalMonths: number;
+  /** Build, permits and fit-out before opening: no revenue, rent and interest still due. */
+  preOpening?: PreOpening;
   financing: Financing;
   streams: RevenueStream[];
   costs: OperatingCosts;
   exit: ExitAssumptions;
   capacity?: CapacityLimits;
-  /** First calendar month of operation (1 = January). Defaults to 1. */
+  /** Calendar month the project starts (1 = January); opening is this plus the pre-opening months. */
   startCalendarMonth?: number;
   /** Months to simulate. Defaults to 60. */
   horizonMonths?: number;
@@ -140,24 +163,42 @@ export interface Percentiles {
 }
 
 export interface MonthSnapshot {
+  /** Monthly averages over one operating year. */
   revenue: Percentiles;
   costs: Percentiles;
+  /** After loan payments, before income tax. */
   profit: Percentiles;
+  /** After loan payments and estimated income tax: what the owner keeps. */
+  takeHome: Percentiles;
 }
 
 export interface StartupResult {
-  /** Total project cost including contingency and working capital. */
+  /** Project cost: build/fit-out, contingency and an opening buffer. */
   total: Percentiles;
   lines: { key: string; label: string; p50: number }[];
   contingencyP50: number;
   workingCapitalP50: number;
-  /** Cash the owner puts in (P50 case). */
+  /** Rent, interest and running costs before opening (P50). */
+  preOpeningCostP50: number;
+  preOpeningMonthsP50: number;
+  /** Cash the owner puts into the project (P50 case). */
   ownerEquityP50: number;
   loanAmountP50: number;
   monthlyDebtPaymentP50: number;
-  /** True if owner cash covers the required equity in the P50 case. */
+  /** Owner equity plus the cash needed to ride out the dip before profits arrive. */
+  cashNeeded: Percentiles;
+  /** True if owner cash covers equity plus the P50 cash dip, and any loan passes the lender test. */
   fundable: boolean;
   fundingNote: string;
+}
+
+export interface LenderTest {
+  applies: boolean;
+  /** Years 1-2 average operating profit before loan payments / loan payment (P50). */
+  dscrP50: number | null;
+  required: number;
+  bankable: boolean;
+  note: string;
 }
 
 export interface ValuationResult {
@@ -165,7 +206,9 @@ export interface ValuationResult {
   /** Net proceeds after selling costs and debt payoff. */
   netProceeds: Percentiles;
   price: Percentiles;
+  /** How the business part was valued; property is added on top when owned. */
   method: 'sde' | 'ebitda' | 'asset';
+  propertyValueP50: number;
 }
 
 export interface SensitivityItem {
@@ -180,17 +223,26 @@ export interface AnalysisResult {
   simulations: number;
   seed: number;
   startup: StartupResult;
-  month12: MonthSnapshot;
-  month36: MonthSnapshot;
-  month60: MonthSnapshot;
-  /** Median month in which monthly profit first turns positive (null if never). */
+  lender: LenderTest;
+  /** Monthly averages over operating years 1, 3 and 5 (year 1 starts on opening day). */
+  year1: MonthSnapshot;
+  year3: MonthSnapshot;
+  year5: MonthSnapshot;
+  /** Median operating month in which take-home first turns positive (null if never). */
   breakEvenMonthP50: number | null;
-  /** Lowest cumulative cash position, P10 (worst realistic case) and P50. */
+  /** Lowest business cash position from project start, P10 (worst realistic case) and P50. */
   cashLowPoint: { p10: number; p50: number };
   valuation: ValuationResult[];
-  /** Total return on owner cash at year 5 (profits taken + net sale) / equity. */
+  /** Total return on owner cash at year 5 (take-home + net sale) / cash needed. */
   totalReturnYear5: Percentiles;
   sensitivity: SensitivityItem[];
-  capacity: { peakOwnerHoursP50: number; limit: number | null; exceeded: boolean };
+  capacity: {
+    peakOwnerHoursP50: number;
+    limit: number | null;
+    /** Hours per month paid help covers at maturity (P50); 0 = the owner runs it alone. */
+    paidHelpHoursP50: number;
+    paidHelpCostP50: number;
+    needsHelp: boolean;
+  };
   warnings: string[];
 }

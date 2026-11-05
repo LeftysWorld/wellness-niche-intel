@@ -56,3 +56,35 @@ export function percentiles(values: number[]): Percentiles {
 export function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
+
+/** Triangular draw from a given uniform u in (0,1), so draws can be correlated. */
+export function triFromU(t: Tri, u: number): number {
+  const { low, mode, high } = normalizeTri(t);
+  if (high === low) return mode;
+  const c = (mode - low) / (high - low);
+  return u < c ? low + Math.sqrt(u * (high - low) * (mode - low)) : high - Math.sqrt((1 - u) * (high - low) * (high - mode));
+}
+
+/** Standard normal draw (Box-Muller). */
+export function normal(rng: () => number): number {
+  const u1 = Math.max(rng(), 1e-12);
+  const u2 = rng();
+  return Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+}
+
+/** Standard normal cumulative distribution (Abramowitz-Stegun 7.1.26 via erf). */
+export function normCdf(z: number): number {
+  const x = Math.abs(z) / Math.SQRT2;
+  const t = 1 / (1 + 0.3275911 * x);
+  const erf = 1 - ((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-x * x);
+  return z >= 0 ? 0.5 * (1 + erf) : 0.5 * (1 - erf);
+}
+
+/**
+ * Uniform draw that shares a common factor with other draws (Gaussian copula).
+ * rho = 0 is independent; rho = 1 moves in lockstep with the common factor.
+ */
+export function correlatedU(common: number, rho: number, rng: () => number): number {
+  const z = rho * common + Math.sqrt(1 - rho * rho) * normal(rng);
+  return Math.min(1 - 1e-9, Math.max(1e-9, normCdf(z)));
+}

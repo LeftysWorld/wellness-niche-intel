@@ -75,6 +75,9 @@ export async function writeAssumptions(run: Run, agent: string, items: NewAssump
 export const REQUIRED_LOCATION_KEYS = [
   'land.price_per_acre_usd',
   'lease.finca_monthly_usd',
+  'lease.commercial_monthly_usd',
+  'lease.estate_monthly_usd',
+  'tax.income_effective_pct',
   'labor.monthly_wage_usd',
   'tax.revenue_pct',
   'build.cost_index',
@@ -87,6 +90,9 @@ export const REQUIRED_LOCATION_KEYS = [
 export const KEY_GUIDE: Record<string, string> = {
   'land.price_per_acre_usd': 'Asking price per acre (USD) for rural land of 1-10 acres suitable for a small retreat',
   'lease.finca_monthly_usd': 'Monthly rent (USD) for a furnished rural house or finca with 4+ bedrooms and some land',
+  'lease.commercial_monthly_usd': 'Monthly rent (USD) for a rural or edge-of-town property where a public-facing business (day visitors, parking) is allowed',
+  'lease.estate_monthly_usd': 'Monthly rent (USD) for a large rural estate (20+ acres) with several buildings',
+  'tax.income_effective_pct': 'Effective income tax plus self-employment or social-security tax on about $60,000 a year of small-business profit, as a fraction',
   'labor.monthly_wage_usd': 'Fully loaded monthly cost (USD) of one full-time hospitality worker, including employer charges',
   'tax.revenue_pct': 'Taxes charged on gross revenue for a small lodging business, as a fraction (0.05 = 5%)',
   'build.cost_index': 'Construction cost relative to rural western North Carolina = 1.0',

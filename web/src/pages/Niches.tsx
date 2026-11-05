@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { callAgent, supabase } from '../supabase.ts';
+import { callAgent, supabase, usd } from '../supabase.ts';
 import { Err, Loading, RunButton, Section, useLoad } from '../ui.tsx';
 
 const FILTERS = [
@@ -20,7 +20,23 @@ export function Niches() {
       .order('favorite', { ascending: false })
       .order('signal_score', { ascending: false });
     if (error) throw error;
-    return data ?? [];
+    // Best screened idea per niche, so a new niche can be judged before it is approved.
+    const { data: ideas } = await supabase
+      .from('pairings')
+      .select('niche_id,scores,locations(name)')
+      .neq('status', 'screened_out')
+      .not('scores', 'is', null);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const best: Record<string, any> = {};
+    for (const i of ideas ?? []) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const sc = (i as any).scores;
+      if (sc?.target_year_figure === undefined) continue;
+      const cur = best[i.niche_id];
+      const better = !cur || Number(sc.fundable) > Number(cur.scores.fundable) || (sc.fundable === cur.scores.fundable && sc.target_year_figure > cur.scores.target_year_figure);
+      if (better) best[i.niche_id] = i;
+    }
+    return (data ?? []).map((n) => ({ ...n, best: best[n.id] ?? null }));
   });
 
   const list = (data ?? []).filter((n) =>
@@ -91,6 +107,48 @@ export function Niches() {
                     <b>Makes money from:</b> {[c.revenue_units, c.price_model].filter(Boolean).join(' — ')}
                   </p>
                 )}
+                {n.best && (
+                  <p className="small">
+                    <b>Best place so far:</b> {n.best.locations?.name} — year 1 {usd(n.best.scores.target_year_figure)}/mo, year 3 {usd(n.best.scores.year3_figure)}/mo
+                    {n.best.scores.fundable ? '' : ' (not fundable with your cash)'}
+                  </p>
+                )}
+                {c.model && (
+                  <p className="small muted">
+                    {c.model.openHoursPerMonth !== undefined ? `On site ${c.model.openHoursPerMonth} h/month` : 'Opening hours not set'} ·{' '}
+                    {c.model.buildMonths?.lease?.mode ?? '?'} months to open if leased, {c.model.buildMonths?.own?.mode ?? '?'} if built · site: {c.model.siteType ?? 'house'}
+                  </p>
+                )}
+                {(c.prerequisites ?? []).length > 0 && (
+                  <p className="small">
+                    <b>Site must have:</b> {c.prerequisites.join('; ')}
+                  </p>
+                )}
+                {c.demand_evidence && (
+                  <p className="small">
+                    <b>Demand {c.demand_score ?? '?'}/10:</b> {c.demand_evidence}
+                  </p>
+                )}
+                {c.review && (
+                  <div className={`banner ${c.review.verdict === 'pass' ? '' : c.review.verdict === 'flag' ? 'warn' : 'err'} small`}>
+                    <b>Independent check: {c.review.verdict}.</b> {(c.review.concerns ?? []).slice(0, 3).join(' ')}
+                    {(c.review.key_assumptions ?? []).length > 0 && (
+                      <table className="small">
+                        <tbody>
+                          {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+                          {c.review.key_assumptions.map((a: any) => (
+                            <tr key={a.name}>
+                              <td>{a.name}</td>
+                              <td>{a.value}</td>
+                              <td className={a.supported === 'yes' ? 'ok' : a.supported === 'no' ? 'err' : ''}>{a.supported === 'yes' ? 'supported' : a.supported === 'no' ? 'not supported' : 'partly'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+                )}
+                {!c.review && written && <p className="small muted">Not independently checked yet — press Write it up again to check it.</p>}
                 {(n.risk_tags ?? []).length > 0 && <p className="small err">Needs: {n.risk_tags.join(', ')}</p>}
                 {c.smoke_test?.length > 0 && <p className="small err">Write-up needs another pass: {c.smoke_test.join('; ')}</p>}
                 <p className="small">
@@ -116,8 +174,8 @@ export function Niches() {
                   </ul>
                 )}
                 <footer>
-                  {n.status === 'proposed' && !written && (
-                    <RunButton label="Write it up" action={() => callAgent('niche-discovery', { niche_id: n.id })} onDone={reload} />
+                  {n.status === 'proposed' && (
+                    <RunButton label={written ? 'Rewrite and re-check' : 'Write it up'} action={() => callAgent('niche-discovery', { niche_id: n.id })} onDone={reload} />
                   )}
                   {n.status === 'proposed' && written && !c.smoke_test?.length && <button onClick={() => set(n.id, { status: 'approved' })}>Use this niche</button>}
                   {n.status !== 'rejected' && (

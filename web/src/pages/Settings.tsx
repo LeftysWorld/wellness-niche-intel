@@ -1,0 +1,132 @@
+import { useEffect, useState } from 'react';
+import { callAgent, supabase } from '../supabase.ts';
+import { Err, Loading, Section, useLoad } from '../ui.tsx';
+
+const WEIGHT_LABELS: Record<string, string> = {
+  money: 'Year-1 take-home vs target',
+  growth: 'Year-3 take-home vs target',
+  capital: 'Fundable with my cash',
+  workload: 'Little paid help needed',
+  demand: 'Evidence of demand',
+  place: 'Place matches my description',
+  visa: 'Residency route',
+  risk: 'Country risk',
+  evidence: 'Sourced data',
+};
+const LOAN_TYPES = ['sba', 'usda', 'local_bank'];
+
+export function Settings() {
+  const { data, error } = useLoad(async () => {
+    const { data, error } = await supabase.from('parameter_profiles').select('id,name,params').eq('is_default', true).single();
+    if (error) throw error;
+    return data;
+  });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const [p, setP] = useState<any>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+  useEffect(() => {
+    if (data) setP(structuredClone(data.params));
+  }, [data]);
+  if (error) return <Err error={error} />;
+  if (!p) return <Loading />;
+
+  const set = (k: string, v: unknown) => setP({ ...p, [k]: v });
+  const loans = (p.financing_allowed ?? []).some((f: string) => LOAN_TYPES.includes(f));
+
+  async function save() {
+    setMsg('Saving…');
+    const { error } = await supabase.from('parameter_profiles').update({ params: p }).eq('id', data!.id);
+    if (error) return setMsg(error.message);
+    setMsg('Saved. Re-ranking ideas with the new settings…');
+    try {
+      await callAgent('fit-screen');
+      setMsg('Saved and re-ranked.');
+    } catch (e) {
+      setMsg(`Saved. Re-ranking failed: ${e instanceof Error ? e.message : e}`);
+    }
+  }
+
+  return (
+    <div className="settings">
+      <Section title="My goal">
+        <div className="row">
+          <label>
+            Monthly target (USD)
+            <input type="number" value={p.target_monthly_profit_usd ?? 5000} onChange={(e) => set('target_monthly_profit_usd', Number(e.target.value))} />
+          </label>
+          <label>
+            By year after opening
+            <select value={p.target_year ?? 1} onChange={(e) => set('target_year', Number(e.target.value))}>
+              <option value={1}>Year 1</option>
+              <option value={3}>Year 3</option>
+            </select>
+          </label>
+          <label>
+            Compare the target with
+            <select value={p.target_basis ?? 'after_tax'} onChange={(e) => set('target_basis', e.target.value)}>
+              <option value="after_tax">Take-home after income tax</option>
+              <option value="pre_tax">Profit before income tax</option>
+            </select>
+          </label>
+        </div>
+      </Section>
+      <Section title="Money and work">
+        <div className="row">
+          <label>
+            Cash I can put in (USD)
+            <input type="number" value={p.capital_usd?.max ?? 150000} onChange={(e) => set('capital_usd', { ...p.capital_usd, max: Number(e.target.value) })} />
+          </label>
+          <label>
+            Own or lease
+            <select value={p.own_or_lease ?? 'either'} onChange={(e) => set('own_or_lease', e.target.value)}>
+              <option value="either">Either</option>
+              <option value="lease">Lease only</option>
+              <option value="own">Buy only</option>
+            </select>
+          </label>
+          <label>
+            Borrow to buy land
+            <select
+              value={loans ? 'yes' : 'no'}
+              onChange={(e) => {
+                const rest = (p.financing_allowed ?? []).filter((f: string) => !LOAN_TYPES.includes(f));
+                set('financing_allowed', e.target.value === 'yes' ? [...rest, 'sba', 'usda'] : rest);
+              }}
+            >
+              <option value="yes">Yes, if a lender would approve</option>
+              <option value="no">No, cash only</option>
+            </select>
+          </label>
+        </div>
+        <div className="row">
+          <label>
+            Hours a month I'll work on site
+            <input type="number" value={p.owner_hours_per_month ?? 220} onChange={(e) => set('owner_hours_per_month', Number(e.target.value))} />
+          </label>
+          <label>
+            Who runs it
+            <select value={p.operator_model ?? 'solo'} onChange={(e) => set('operator_model', e.target.value)}>
+              <option value="solo">Me, with paid help only for hours I can't cover</option>
+              <option value="team">A team (the niche's usual staff)</option>
+            </select>
+          </label>
+        </div>
+      </Section>
+      <Section title="How ideas are scored">
+        <p className="muted small">The Business ideas page sorts by money by default; the overall score is a second view that uses these weights.</p>
+        {Object.keys(WEIGHT_LABELS).map((k) => (
+          <label key={k} className="slider">
+            <span>
+              {WEIGHT_LABELS[k]} <b>{Math.round((p.weights?.[k] ?? 0) * 100)}</b>
+            </span>
+            <input type="range" min={0} max={0.5} step={0.05} value={p.weights?.[k] ?? 0} onChange={(e) => set('weights', { ...p.weights, [k]: Number(e.target.value) })} />
+          </label>
+        ))}
+      </Section>
+      <div className="actions">
+        <button onClick={save}>Save settings</button>
+        {msg && <small className="muted">{msg}</small>}
+      </div>
+    </div>
+  );
+}

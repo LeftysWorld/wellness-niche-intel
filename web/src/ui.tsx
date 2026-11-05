@@ -59,3 +59,18 @@ export function RunButton({ label, action, onDone }: { label: string; action: ()
 
 export const Err = ({ error }: { error: string | null }) => (error ? <p className="err">{error}</p> : null);
 export const Loading = () => <p className="muted">Loading…</p>;
+
+/** How much of an idea rests on sourced values versus estimates. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function EvidenceBadge({ evidence }: { evidence: any }) {
+  if (!evidence) return null;
+  const pct = Math.round((evidence.sourcedShare ?? 0) * 100);
+  const level = pct >= 70 && !evidence.nicheGuessed ? 'ok' : pct >= 40 ? 'warn' : 'bad';
+  const label = level === 'ok' ? 'Mostly sourced' : level === 'warn' ? 'Partly guessed' : 'Mostly guessed';
+  const title = `${pct}% of place values sourced; niche economics ${evidence.nicheGuessed ? 'are estimates' : 'sourced'}. Guessed: ${(evidence.guessed ?? []).join(', ') || 'none'}. Missing: ${(evidence.missing ?? []).join(', ') || 'none'}.`;
+  return (
+    <span className={`pill evidence ${level}`} title={title}>
+      {label} · {pct}%
+    </span>
+  );
+}

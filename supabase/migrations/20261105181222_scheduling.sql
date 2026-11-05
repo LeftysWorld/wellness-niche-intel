@@ -19,7 +19,7 @@ $$;
 revoke execute on function public.check_cron_secret(text) from public, anon, authenticated;
 grant execute on function public.check_cron_secret(text) to service_role;
 
--- Fire one agent (through the api router function) with a JSON body.
+-- Fire one edge function with a JSON body.
 create or replace function private.invoke(fn text, body jsonb default '{}'::jsonb) returns bigint
 language plpgsql security definer set search_path = public, vault, net as $$
 declare
@@ -32,7 +32,7 @@ begin
     raise exception 'Vault secrets project_url and cron_secret must exist (run scripts/setup_vault.sql)';
   end if;
   return net.http_post(
-    url := base || '/functions/v1/api/' || fn,
+    url := base || '/functions/v1/' || fn,
     body := body,
     headers := jsonb_build_object('Content-Type', 'application/json', 'x-cron-secret', secret),
     timeout_milliseconds := 300000

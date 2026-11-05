@@ -18,14 +18,19 @@ export interface VerifyReport {
 
 export function codeChecks(model: BusinessModel, r: AnalysisResult, th: Thresholds): VerifyReport['checks'] {
   const checks: VerifyReport['checks'] = [];
-  const rev = r.month36.revenue.p50;
-  const margin = rev > 0 ? r.month36.profit.p50 / rev : 0;
+  const rev = r.year3.revenue.p50;
+  const margin = rev > 0 ? r.year3.profit.p50 / rev : 0;
   checks.push({ name: 'year-3 margin plausible', ok: margin <= th.verifier_max_margin, detail: `margin ${(margin * 100).toFixed(1)}% (limit ${th.verifier_max_margin * 100}%)` });
   const hot = model.streams.filter((s) => s.units * s.sellablePerUnitPerMonth > 1 && normalizeTri(s.startOccupancy).mode > th.verifier_max_year1_occupancy);
   checks.push({ name: 'opening occupancy realistic', ok: hot.length === 0, detail: hot.length ? `high start occupancy: ${hot.map((s) => s.key).join(', ')}` : 'ok' });
   checks.push({ name: 'fundable with owner cash', ok: r.startup.fundable, detail: r.startup.fundingNote });
-  checks.push({ name: 'owner workload within limit', ok: !r.capacity.exceeded, detail: `peak ${Math.round(r.capacity.peakOwnerHoursP50)} h/month vs ${r.capacity.limit}` });
-  checks.push({ name: 'percentiles ordered', ok: r.month36.profit.p10 <= r.month36.profit.p50 && r.month36.profit.p50 <= r.month36.profit.p90, detail: 'P10 ≤ P50 ≤ P90' });
+  // deno-lint-ignore no-explicit-any
+  const ev = (r as any).evidence;
+  if (ev) checks.push({ name: 'inputs mostly sourced', ok: ev.sourcedShare >= 0.5 && !ev.nicheGuessed, detail: `${Math.round(ev.sourcedShare * 100)}% of place inputs sourced; niche economics ${ev.nicheGuessed ? 'guessed' : 'sourced'}` });
+  checks.push({ name: 'opening hours are covered', ok: (model.capacity?.openHoursPerMonth ?? 0) > 0, detail: `${model.capacity?.openHoursPerMonth ?? 0} on-site hours/month; ${r.capacity.paidHelpHoursP50} h/month paid help` });
+  checks.push({ name: 'lender test', ok: r.lender.bankable, detail: r.lender.note });
+  checks.push({ name: 'build period included', ok: r.startup.preOpeningMonthsP50 > 0, detail: `${r.startup.preOpeningMonthsP50} months before opening` });
+  checks.push({ name: 'percentiles ordered', ok: r.year3.profit.p10 <= r.year3.profit.p50 && r.year3.profit.p50 <= r.year3.profit.p90, detail: 'P10 ≤ P50 ≤ P90' });
   checks.push({ name: 'survives worst realistic cash dip', ok: r.cashLowPoint.p10 > -model.financing.ownerCash * 0.25, detail: `P10 cash low point ${Math.round(r.cashLowPoint.p10)}` });
   return checks;
 }
@@ -60,7 +65,7 @@ export async function verifyResult(run: Run, resultId: string): Promise<VerifyRe
     prompt: [
       `Business: ${model.label}`,
       `Inputs (three-point estimates, USD):\n${clip(JSON.stringify({ streams: model.streams, costs: model.costs, startup: model.startupCosts, financing: model.financing, exit: model.exit }), 9000)}`,
-      `Key results (P10/P50/P90 monthly profit): month 12 ${fmt(result.month12.profit)}, month 36 ${fmt(result.month36.profit)}, month 60 ${fmt(result.month60.profit)}. Startup P50 $${Math.round(result.startup.total.p50)}. Break-even month ${result.breakEvenMonthP50 ?? 'never'}.`,
+      `Key results (P10/P50/P90 average monthly take-home after tax): year 1 ${fmt(result.year1.takeHome)}, year 3 ${fmt(result.year3.takeHome)}, year 5 ${fmt(result.year5.takeHome)}. Project cost P50 $${Math.round(result.startup.total.p50)}; cash needed P50 $${Math.round(result.startup.cashNeeded.p50)}; ${result.startup.preOpeningMonthsP50} months to open. Lender: ${result.lender.note}`,
       `Automated checks: ${checks.map((c) => `${c.ok ? 'OK' : 'FAIL'} ${c.name} (${c.detail})`).join('; ')}`,
       `Sources to check (does the page support the value?):\n${pages
         .map(({ a, text }) => `- key ${a.key} = ${a.value_num ?? a.value_text} ${a.unit ?? ''} ${a.currency ?? ''} from ${a.source_url}\n  page text: ${text ? clip(text, 2500) : '(unreachable)'}`)

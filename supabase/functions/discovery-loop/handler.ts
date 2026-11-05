@@ -4,7 +4,7 @@
 //   mode=daily  → a rotating slice of concept queries
 //   mode=weekly → every concept query plus businesses-for-sale queries
 import { db, getSetting, must, type Budgets, type Models } from '../_shared/db.ts';
-import { ask } from '../_shared/llm.ts';
+import { ask, clip } from '../_shared/llm.ts';
 import { withRun, type Run } from '../_shared/runs.ts';
 import { search, type SearchHit } from '../_shared/search.ts';
 
@@ -112,82 +112,113 @@ export async function run(body: Record<string, unknown>) {
     const fresh = [...hits.values()].filter((h) => !seen.has(h.url));
 
     const tally = { new_niche: 0, new_example: 0, change: 0, seen: 0, irrelevant: 0 };
+    // Businesses that match no existing niche by name wait here, so the whole batch
+    // can be grouped once (by meaning, not just wording) before any niche is created.
+    const unmatched: { hit: SearchHit; x: Extracted; fp: string }[] = [];
+
+    const saveExample = async (x: Extracted, hit: SearchHit, fp: string, nicheId: string | null) =>
+      must(
+        await db()
+          .from('example_businesses')
+          .insert({ niche_id: nicheId, name: x.name, country: x.country, region: x.region, locality: x.locality, url: hit.url, description: x.description, prices: { items: x.prices }, status: x.status, fingerprint: fp })
+          .select('id')
+          .single(),
+        'new example',
+      ).id as string;
+    const markSeen = async (hit: SearchHit, x: Extracted | undefined, classification: keyof typeof tally, exampleId: string | null, nicheId: string | null) => {
+      tally[classification]++;
+      await db().from('seen_items').upsert(
+        { url: hit.url, classification, example_id: exampleId, niche_id: nicheId, raw: { title: hit.title, snippet: hit.snippet, extracted: x ?? null }, run_id: run.id },
+        { onConflict: 'url' },
+      );
+    };
+
     for (let i = 0; i < fresh.length; i += 15) {
       const batch = fresh.slice(i, i + 15);
       const items = await classify(run, models.extraction, batch);
       for (let j = 0; j < batch.length; j++) {
         const hit = batch[j];
         const x = items.find((it) => it.index === j);
-        let classification: keyof typeof tally = 'irrelevant';
-        let exampleId: string | null = null;
-        let nicheId: string | null = null;
+        if (!(x?.relevant && x.land_or_structure && x.name)) {
+          await markSeen(hit, x, 'irrelevant', null, null);
+          continue;
+        }
+        const fp = must(await db().rpc('business_fingerprint', { name: x.name, locality: x.locality, country: x.country }), 'fingerprint') as string;
+        const [dupe] = must(await db().rpc('match_examples', { q: fp, min_similarity: 0.6, max_rows: 1 }), 'match examples') as { id: string; niche_id: string }[];
+        if (dupe) {
+          const prev = must(await db().from('example_businesses').select('status').eq('id', dupe.id).single(), 'example');
+          await db().from('example_businesses').update({ last_seen_at: new Date().toISOString(), status: x.status }).eq('id', dupe.id);
+          await markSeen(hit, x, prev.status !== x.status ? 'change' : 'seen', dupe.id, dupe.niche_id);
+          continue;
+        }
+        const [match] = must(await db().rpc('match_niches', { q: x.niche_guess, min_similarity: 0.45, max_rows: 1 }), 'match niches') as { id: string }[];
+        if (match) {
+          const exampleId = await saveExample(x, hit, fp, match.id);
+          await markSeen(hit, x, 'new_example', exampleId, match.id);
+        } else {
+          unmatched.push({ hit, x, fp });
+        }
+      }
+    }
 
-        if (x?.relevant && x.land_or_structure && x.name) {
-          const fp = must(await db().rpc('business_fingerprint', { name: x.name, locality: x.locality, country: x.country }), 'fingerprint') as string;
-          const [dupe] = must(await db().rpc('match_examples', { q: fp, min_similarity: 0.6, max_rows: 1 }), 'match examples') as { id: string; niche_id: string }[];
-          if (dupe) {
-            const prev = must(await db().from('example_businesses').select('status').eq('id', dupe.id).single(), 'example');
-            await db().from('example_businesses').update({ last_seen_at: new Date().toISOString(), status: x.status }).eq('id', dupe.id);
-            classification = prev.status !== x.status ? 'change' : 'seen';
-            exampleId = dupe.id;
-            nicheId = dupe.niche_id;
-          } else {
-            const [match] = must(await db().rpc('match_niches', { q: x.niche_guess, min_similarity: 0.35, max_rows: 1 }), 'match niches') as { id: string; status: string }[];
-            if (match) {
-              nicheId = match.id;
-              classification = 'new_example';
-            } else {
-              const slug = slugify(x.niche_guess) || slugify(x.name);
-              const existing = must(await db().from('niches').select('id').eq('slug', slug).maybeSingle(), 'niche slug');
-              if (existing) {
-                nicheId = existing.id;
-                classification = 'new_example';
-              } else {
-                const created = must(
-                  await db()
-                    .from('niches')
-                    .insert({ slug, name: x.niche_guess, family: 'discovered', aliases: [], status: 'proposed', card: { discovered_from: hit.url, description: x.description }, risk_tags: [] })
-                    .select('id')
-                    .single(),
-                  'new niche',
-                );
-                nicheId = created.id;
-                classification = 'new_niche';
-                await db().from('review_queue').insert({
-                  item_type: 'niche',
-                  item_id: created.id,
-                  summary: `New niche spotted: ${x.niche_guess} (e.g. ${x.name}, ${x.locality || x.region}, ${x.country})`,
-                  payload: { url: hit.url, description: x.description },
-                });
-              }
+    if (unmatched.length) {
+      // One grouping call: map each unmatched business to an existing niche, or to a new group.
+      const known = must(await db().from('niches').select('slug,name,card').neq('status', 'rejected'), 'known niches') as { slug: string; name: string; card: Record<string, string> }[];
+      const grouped = await ask<{ items: { index: number; existing_slug: string; new_group: string }[] }>({
+        run,
+        model: models.extraction,
+        system: 'You file businesses under business types. Put a business under an existing type when it is the same kind of business, even if worded differently. Otherwise give it a short new type name; businesses of the same new kind must share exactly the same new name.',
+        prompt: `Existing types:\n${known.map((k) => `- ${k.slug}: ${k.name} — ${clip(k.card?.summary ?? k.card?.description ?? '', 140)}`).join('\n')}\n\nBusinesses:\n${unmatched
+          .map((u, i) => `[${i}] ${u.x.name} (${u.x.locality}, ${u.x.country}): ${u.x.niche_guess} — ${clip(u.x.description, 200)}`)
+          .join('\n')}\n\nFor each, give existing_slug (or "") and new_group (or "").`,
+        tool: {
+          name: 'grouping',
+          description: 'A type for each business',
+          schema: {
+            type: 'object',
+            properties: {
+              items: {
+                type: 'array',
+                items: { type: 'object', properties: { index: { type: 'integer' }, existing_slug: { type: 'string' }, new_group: { type: 'string' } }, required: ['index', 'existing_slug', 'new_group'] },
+              },
+            },
+            required: ['items'],
+          },
+        },
+        maxTokens: 3000,
+      });
+      const bySlug = new Map(known.map((k) => [k.slug, k]));
+      const created = new Map<string, string>();
+      for (let i = 0; i < unmatched.length; i++) {
+        const { hit, x, fp } = unmatched[i];
+        const g = grouped.items.find((it) => it.index === i);
+        let nicheId: string | null = null;
+        let kind: keyof typeof tally = 'new_example';
+        if (g?.existing_slug && bySlug.has(g.existing_slug)) {
+          nicheId = must(await db().from('niches').select('id').eq('slug', g.existing_slug).single(), 'niche').id;
+        } else {
+          const label = (g?.new_group || x.niche_guess).trim();
+          const slug = slugify(label) || slugify(x.name);
+          if (created.has(slug)) nicheId = created.get(slug)!;
+          else {
+            const existing = must(await db().from('niches').select('id').eq('slug', slug).maybeSingle(), 'niche slug');
+            if (existing) nicheId = existing.id;
+            else {
+              nicheId = must(
+                await db()
+                  .from('niches')
+                  .insert({ slug, name: label, family: 'discovered', aliases: [x.niche_guess], status: 'proposed', card: { discovered_from: hit.url, description: x.description }, risk_tags: [] })
+                  .select('id')
+                  .single(),
+                'new niche',
+              ).id;
+              kind = 'new_niche';
             }
-            const ex = must(
-              await db()
-                .from('example_businesses')
-                .insert({
-                  niche_id: nicheId,
-                  name: x.name,
-                  country: x.country,
-                  region: x.region,
-                  locality: x.locality,
-                  url: hit.url,
-                  description: x.description,
-                  prices: { items: x.prices },
-                  status: x.status,
-                  fingerprint: fp,
-                })
-                .select('id')
-                .single(),
-              'new example',
-            );
-            exampleId = ex.id;
+            created.set(slug, nicheId!);
           }
         }
-        tally[classification]++;
-        await db().from('seen_items').upsert(
-          { url: hit.url, classification, example_id: exampleId, niche_id: nicheId, raw: { title: hit.title, snippet: hit.snippet, extracted: x ?? null }, run_id: run.id },
-          { onConflict: 'url' },
-        );
+        const exampleId = await saveExample(x, hit, fp, nicheId);
+        await markSeen(hit, x, kind, exampleId, nicheId);
       }
     }
     await db().rpc('refresh_niche_signals');

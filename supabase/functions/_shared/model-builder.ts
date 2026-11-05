@@ -42,11 +42,23 @@ export interface StreamSpec {
   monthsToMature: Tri;
   ownerHoursPerSale?: number;
   seasonality?: number[];
+  /** Who buys: people living nearby, or travellers. Defaults from requiresPopulation. */
+  market?: 'local' | 'destination';
 }
+
+/** What kind of site the niche needs, which decides which lease applies. */
+export type SiteType = 'house' | 'commercial' | 'estate';
 
 export interface NicheModelSpec {
   basis?: string;
+  /** Admin, marketing and upkeep hours per month. */
   ownerFixedHours: number;
+  /** Hours per month someone must be on site because the business is open. */
+  openHoursPerMonth?: number;
+  /** Months from start to opening, by tenure. */
+  buildMonths?: { own?: Tri; lease?: Tri };
+  /** house: a rentable home with rooms; commercial: public-facing use; estate: large acreage with buildings. */
+  siteType?: SiteType;
   variablePct: Tri;
   requiresPopulation?: boolean;
   streams: StreamSpec[];
@@ -91,8 +103,21 @@ export interface BuildInput {
   ledger: Ledger;
   profile: ProfileParams;
   tenure: Tenure;
-  /** Include the niche's paid staff even for a solo owner (used when the owner's hours would be exceeded). */
-  withStaff?: boolean;
+  /** Pay cash even where a loan is allowed (used when a loan fails the lender test). */
+  financingOverride?: 'cash';
+  /** Calendar month the project would start (1-12). Defaults to the current month. */
+  startMonth?: number;
+}
+
+/** Where each input came from, so results can say what is sourced and what is guessed. */
+export interface Evidence {
+  sourced: string[];
+  guessed: string[];
+  missing: string[];
+  /** Share of place inputs that are sourced (0-1). */
+  sourcedShare: number;
+  /** True when the niche's own economics are an AI draft or starting estimate. */
+  nicheGuessed: boolean;
 }
 
 /** Rent for the site is always added from the place's ledger value, never from a niche's own cost list. */
@@ -101,8 +126,7 @@ const RENT_LINE = /\b(lease|rent|renta|arriendo|alquiler)\b/i;
 export interface BuildOutput {
   model: BusinessModel;
   tenure: Tenure;
-  /** False when the owner runs it alone with no paid staff. */
-  staffed: boolean;
+  evidence: Evidence;
   usedAssumptionIds: string[];
   /** Ledger keys the model needed but could not find; a fallback was used. */
   missing: string[];
@@ -133,47 +157,103 @@ function clampTri(a: Tri, lo: number, hi: number): Tri {
   return { low: c(a.low), mode: c(a.mode), high: c(a.high) };
 }
 
+/** Lease key and fallback multiple of the house lease, by the kind of site a niche needs. */
+const LEASE_BY_SITE: Record<SiteType, { key: string; vsHouse: number }> = {
+  house: { key: 'lease.finca_monthly_usd', vsHouse: 1 },
+  commercial: { key: 'lease.commercial_monthly_usd', vsHouse: 1.4 },
+  estate: { key: 'lease.estate_monthly_usd', vsHouse: 2.5 },
+};
+
+const DEFAULT_BUILD_MONTHS: Record<Tenure, Tri> = {
+  own: { low: 6, mode: 10, high: 18 },
+  lease: { low: 2, mode: 3, high: 6 },
+};
+
+/** Monthly hours in a full-time job, for turning a monthly wage into an hourly one. */
+const HOURS_PER_FTE = 173;
+
+/** Lenders want more equity from a business with no operating history. */
+const STARTUP_MIN_EQUITY = 0.25;
+
+function parseCurve(v: LedgerValue | undefined): number[] | undefined {
+  if (!v?.value_text) return undefined;
+  try {
+    const arr = JSON.parse(v.value_text);
+    if (!Array.isArray(arr) || arr.length !== 12 || arr.some((x) => typeof x !== 'number' || x < 0)) return undefined;
+    const mean = arr.reduce((a: number, b: number) => a + b, 0) / 12;
+    return mean > 0 ? arr.map((x: number) => x / mean) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function isEstimate(v: LedgerValue): boolean {
+  return v.written_by.includes('estimate') || !v.source_url;
+}
+
 export function buildModel(input: BuildInput): BuildOutput {
   const { niche, template, location, ledger, profile, tenure } = input;
   const spec = niche.model;
   const used = new Set<string>();
   const missing: string[] = [];
   const weak = new Set<string>();
+  const sourced = new Set<string>();
+  const guessed = new Set<string>();
 
+  const note = (key: string, v: LedgerValue) => {
+    used.add(v.id);
+    if (v.written_by === 'user' || !isEstimate(v)) sourced.add(key);
+    else guessed.add(key);
+    if (v.confidence === 'low' || isEstimate(v) || v.is_stale) weak.add(key);
+  };
   const read = (key: string, fallback: Tri): Tri => {
     const v = ledger.get(key);
     if (!v || v.value_num === null) {
       missing.push(key);
       return fallback;
     }
-    used.add(v.id);
-    if (v.confidence === 'low' || v.written_by.includes('estimate') || v.is_stale) weak.add(key);
+    note(key, v);
     return ledgerTri(v);
   };
   const readMode = (key: string, fallback: number) => normalizeTri(read(key, point(fallback))).mode;
+  const has = (key: string) => ledger.get(key)?.value_num != null;
 
-  const priceIndex = read('price.index', point(1));
+  // Prices: what locals pay vs what travellers pay can differ a lot (e.g. Colombia).
+  const priceLocal = read('price.index', point(1));
+  const priceDestination = has('price.index_destination') ? read('price.index_destination', point(1)) : priceLocal;
   const buildIndex = read('build.cost_index', point(1));
-  const equipmentIndex = read('equipment.cost_index', point(1));
+  const equipmentIndex = has('equipment.cost_index') ? read('equipment.cost_index', point(1)) : point(1);
   const wage = read('labor.monthly_wage_usd', point(2800));
-  const demand = readMode('demand.multiplier', 1);
-  const scaled = (t: Tri, s: Scale | undefined): Tri =>
-    s === 'build' ? mul(t, buildIndex) : s === 'equipment' ? mul(t, equipmentIndex) : s === 'price' ? mul(t, priceIndex) : t;
 
-  // Revenue streams: niche defaults, localised by price index and demand, overridden by pairing research.
+  // Demand: travellers vs people living within ~40 minutes.
+  const destinationDemand = has('demand.destination_multiplier') ? readMode('demand.destination_multiplier', 1) : readMode('demand.multiplier', 1);
+  const population = has('demand.population_40min') ? readMode('demand.population_40min', 0) : null;
+  const localDemand = population !== null ? Math.min(1.3, Math.max(0.3, Math.sqrt(population / 400000))) : destinationDemand;
+  const curve = parseCurve(ledger.get('demand.seasonality'));
+  if (ledger.get('demand.seasonality')) note('demand.seasonality', ledger.get('demand.seasonality')!);
+  // Locals are steadier through the year than travellers.
+  const localCurve = curve?.map((x) => Math.sqrt(x));
+
+  const scaled = (t: Tri, s: Scale | undefined): Tri =>
+    s === 'build' ? mul(t, buildIndex) : s === 'equipment' ? mul(t, equipmentIndex) : s === 'price' ? mul(t, priceLocal) : t;
+
+  // Revenue streams: niche defaults, localised by market, overridden by pairing research.
   const streams: RevenueStream[] = spec.streams.map((s) => {
+    const market = s.market ?? (spec.requiresPopulation ? 'local' : 'destination');
+    const demand = market === 'local' ? localDemand : destinationDemand;
+    const priceIndex = market === 'local' ? priceLocal : priceDestination;
     const priceOverride = ledger.get(`price.${s.key}_usd`);
-    const price = priceOverride?.value_num != null ? (used.add(priceOverride.id), ledgerTri(priceOverride)) : mul(s.price, priceIndex);
+    const price = priceOverride?.value_num != null ? (note(`price.${s.key}_usd`, priceOverride), ledgerTri(priceOverride)) : mul(s.price, priceIndex);
     const matureOverride = ledger.get(`occupancy.${s.key}.mature`);
     const mature = matureOverride?.value_num != null
-      ? (used.add(matureOverride.id), ledgerTri(matureOverride))
+      ? (note(`occupancy.${s.key}.mature`, matureOverride), ledgerTri(matureOverride))
       : clampTri(scaleTri(s.matureOccupancy, demand), 0, 0.95);
     const startOverride = ledger.get(`occupancy.${s.key}.start`);
     const start = startOverride?.value_num != null
-      ? (used.add(startOverride.id), ledgerTri(startOverride))
+      ? (note(`occupancy.${s.key}.start`, startOverride), ledgerTri(startOverride))
       : clampTri(scaleTri(s.startOccupancy, demand), 0, 0.95);
     const unitsOverride = ledger.get(`units.${s.key}`);
-    const units = unitsOverride?.value_num != null ? (used.add(unitsOverride.id), unitsOverride.value_num) : s.units;
+    const units = unitsOverride?.value_num != null ? (note(`units.${s.key}`, unitsOverride), unitsOverride.value_num) : s.units;
     const flat = s.units * s.sellablePerUnitPerMonth <= 1;
     return {
       key: s.key,
@@ -186,16 +266,22 @@ export function buildModel(input: BuildInput): BuildOutput {
       matureOccupancy: flat ? s.matureOccupancy : mature,
       monthsToMature: s.monthsToMature,
       ownerHoursPerSale: s.ownerHoursPerSale,
-      seasonality: s.seasonality,
+      seasonality: s.seasonality ?? (market === 'local' ? localCurve : curve),
+      market,
     };
   });
   const unitsByStream: Record<string, number> = Object.fromEntries(streams.map((s) => [s.key, s.units]));
+
+  // Rent for the kind of site this niche needs. Also used as market rent when the site is owned.
+  const site = LEASE_BY_SITE[spec.siteType ?? 'house'];
+  const house = read('lease.finca_monthly_usd', point(3000));
+  const siteRent = site.key === 'lease.finca_monthly_usd' ? house : has(site.key) ? read(site.key, house) : (missing.push(site.key), scaleTri(house, site.vsHouse));
 
   // Startup costs.
   const startup: CostLine[] = [];
   let landValue = 0;
   let buildingValue = 0;
-  const lease = tenure === 'lease' ? read('lease.finca_monthly_usd', point(3000)) : point(0);
+  const lease = tenure === 'lease' ? siteRent : point(0);
   if (tenure === 'own') {
     const perAcre = read('land.price_per_acre_usd', point(20000));
     const land = scaleTri(perAcre, template.land_acres);
@@ -221,8 +307,9 @@ export function buildModel(input: BuildInput): BuildOutput {
     .filter((f) => !RENT_LINE.test(`${f.key} ${f.label}`))
     .map((f) => ({ key: f.key, label: f.label, amount: scaled(f.usd, f.scale) }));
   if (tenure === 'lease') fixed.unshift({ key: 'lease', label: 'Lease', amount: lease });
-  // A solo owner does the work themselves; paid staff only when asked for or when the hours don't fit.
-  const solo = String(profile.operator_model ?? 'solo') === 'solo' && !input.withStaff;
+  // A solo owner does the work; any hours beyond their limit are paid for by the hour.
+  // A team-run business carries the niche's own staff lines instead.
+  const solo = String(profile.operator_model ?? 'solo') === 'solo';
   const staffing: MonthlyCost[] = (solo ? [] : spec.staffing).map((s) => ({
     key: s.key,
     label: s.label,
@@ -231,28 +318,33 @@ export function buildModel(input: BuildInput): BuildOutput {
   }));
   const perSaleCost: Record<string, Tri> = {};
   for (const [k, v] of Object.entries(spec.perSale)) perSaleCost[k] = scaled(v.usd, v.scale);
+  if (spec.openHoursPerMonth === undefined) missing.push('niche.open_hours');
 
   // Financing.
   const loanAllowed = profile.financing_allowed.some((f) => ['sba', 'usda', 'local_bank'].includes(f));
   const isUs = location.country_code === 'US';
   const ownerCash = profile.capital_usd.max;
   let financing: BusinessModel['financing'] = { kind: tenure === 'lease' ? 'lease' : 'cash', ownerCash };
-  if (tenure === 'own' && loanAllowed && isUs) {
+  if (tenure === 'own' && loanAllowed && isUs && input.financingOverride !== 'cash') {
     financing = {
       kind: 'loan',
       ownerCash,
-      minEquityPct: readMode('finance.min_equity_pct', 0.2),
+      minEquityPct: Math.max(STARTUP_MIN_EQUITY, readMode('finance.min_equity_pct', STARTUP_MIN_EQUITY)),
       ratePct: readMode('finance.rate_pct', 8.5),
       termYears: 25,
+      minDscr: 1.25,
     };
   }
 
   const exit = spec.exit;
+  const startMonth = input.startMonth ?? new Date().getMonth() + 1;
   const model: BusinessModel = {
     label: `${niche.name} · ${tenure === 'own' ? 'owned' : 'leased'} · ${location.name}`,
     startupCosts: startup,
     contingencyPct: tenure === 'own' ? { low: 0.1, mode: 0.15, high: 0.25 } : { low: 0.1, mode: 0.12, high: 0.2 },
-    workingCapitalMonths: 6,
+    workingCapitalMonths: 3,
+    preOpening: { months: spec.buildMonths?.[tenure] ?? DEFAULT_BUILD_MONTHS[tenure], fixedShare: 0.3 },
+    startCalendarMonth: startMonth,
     financing,
     streams,
     costs: {
@@ -261,6 +353,9 @@ export function buildModel(input: BuildInput): BuildOutput {
       variablePctOfRevenue: spec.variablePct,
       perSaleCost,
       revenueTaxPct: read('tax.revenue_pct', point(0)),
+      reservePctOfRevenue: { low: 0.02, mode: 0.03, high: 0.05 },
+      incomeTaxPct: read('tax.income_effective_pct', { low: 0.15, mode: 0.22, high: 0.3 }),
+      hourlyWage: solo ? scaleTri(wage, 1 / HOURS_PER_FTE) : undefined,
     },
     exit: {
       sdeMultiple: exit.sdeMultiple,
@@ -269,22 +364,34 @@ export function buildModel(input: BuildInput): BuildOutput {
       ownsProperty: tenure === 'own',
       landValue,
       buildingValue,
-      landAppreciation: read('land.appreciation_pct', { low: 0.01, mode: 0.03, high: 0.05 }),
+      landAppreciation: has('land.appreciation_pct') ? read('land.appreciation_pct', point(0.03)) : { low: 0.01, mode: 0.03, high: 0.05 },
       buildingLifeYears: 30,
       sellingCostPct: 0.08,
       ownerDependenceDiscount: 0.15,
       countryDiscount: readMode('exit.country_discount', 0.1),
+      marketRentMonthly: normalizeTri(siteRent).mode,
     },
-    capacity: { ownerHoursPerMonth: profile.owner_hours_per_month ?? 220, ownerFixedHoursPerMonth: spec.ownerFixedHours },
+    capacity: {
+      ownerHoursPerMonth: profile.owner_hours_per_month ?? 220,
+      ownerFixedHoursPerMonth: spec.ownerFixedHours,
+      openHoursPerMonth: spec.openHoursPerMonth ?? 0,
+    },
   };
-  // land.appreciation_pct and equipment.cost_index are optional refinements, not gaps.
-  const optional = new Set(['land.appreciation_pct', 'equipment.cost_index']);
+  const uniqMissing = [...new Set(missing)];
+  const placeKeys = sourced.size + guessed.size + uniqMissing.filter((k) => !k.startsWith('niche.')).length;
+  const nicheGuessed = /draft|estimate|initial defaults/i.test(spec.basis ?? '') || spec.openHoursPerMonth === undefined;
   return {
     model,
     tenure,
-    staffed: !solo,
+    evidence: {
+      sourced: [...sourced],
+      guessed: [...guessed],
+      missing: uniqMissing,
+      sourcedShare: placeKeys ? Math.round((sourced.size / placeKeys) * 100) / 100 : 0,
+      nicheGuessed,
+    },
     usedAssumptionIds: [...used],
-    missing: missing.filter((k) => !optional.has(k)),
+    missing: uniqMissing,
     weakInputs: [...weak],
   };
 }

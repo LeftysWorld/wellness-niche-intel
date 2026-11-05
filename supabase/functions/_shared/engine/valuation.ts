@@ -7,40 +7,42 @@ export interface ValuationPoint {
   price: number;
   netProceeds: number;
   method: 'sde' | 'ebitda' | 'asset';
+  propertyValue: number;
 }
 
 /**
- * Selling price at the end of a given year using three methods side by side:
- * owner earnings (SDE) multiple, EBITDA multiple after a market-rate manager,
- * and asset value for owned land and buildings. The highest defensible value
- * wins, because a seller would not accept less than the best of them.
+ * Selling price at the end of an operating year = business value + property.
+ *
+ * The business is valued on its earnings as a buyer would see them: owner
+ * earnings (SDE) times a multiple, or EBITDA after a market-rate manager times
+ * a multiple, whichever is higher. When the owner also owns the site, the
+ * business is charged a market rent first and the land and buildings are added
+ * separately, so the property is neither ignored nor counted twice.
  */
 export function valueAtYear(model: BusinessModel, sc: Scenario, path: SimulationPath, year: number): ValuationPoint {
   const from = (year - 1) * 12;
-  const to = Math.min(year * 12, path.profit.length);
-  let sde = 0;
-  for (let i = from; i < to; i++) sde += path.profit[i] + path.debtService[i];
+  const to = Math.min(year * 12, path.operatingProfit.length);
+  let earnings = 0;
+  for (let i = from; i < to; i++) earnings += path.operatingProfit[i];
   const ex = model.exit;
+  const rent = ex.ownsProperty ? (ex.marketRentMonthly ?? 0) * 12 : 0;
+  const sde = earnings - rent;
   const sdePrice = Math.max(0, sde) * sc.sdeMultiple * (1 - ex.ownerDependenceDiscount) * (1 - ex.countryDiscount);
   const ebitda = sde - sc.managerMonthlyCost * 12;
   const ebitdaPrice = Math.max(0, ebitda) * sc.ebitdaMultiple * (1 - ex.countryDiscount);
-  let assetPrice = 0;
+
+  let propertyValue = 0;
   if (ex.ownsProperty) {
-    const land = ex.landValue * Math.pow(1 + sc.landAppreciation, year);
-    const building = ex.buildingValue * Math.max(0, 1 - year / Math.max(1, ex.buildingLifeYears));
-    assetPrice = (land + building) * (1 - ex.countryDiscount);
+    const yearsHeld = year + path.preOpeningMonths / 12;
+    const land = ex.landValue * Math.pow(1 + sc.landAppreciation, yearsHeld);
+    const building = ex.buildingValue * Math.max(0, 1 - yearsHeld / Math.max(1, ex.buildingLifeYears));
+    propertyValue = (land + building) * (1 - ex.countryDiscount);
   }
-  let price = sdePrice;
-  let method: ValuationPoint['method'] = 'sde';
-  if (ebitdaPrice > price) {
-    price = ebitdaPrice;
-    method = 'ebitda';
-  }
-  if (assetPrice > price) {
-    price = assetPrice;
-    method = 'asset';
-  }
+  const business = Math.max(sdePrice, ebitdaPrice);
+  const method: ValuationPoint['method'] = business <= 0 ? 'asset' : ebitdaPrice > sdePrice ? 'ebitda' : 'sde';
+  const price = business + propertyValue;
+
   const f = path.funding;
   const debt = loanBalance(f.loan, f.ratePct, f.termMonths, year * 12);
-  return { year, price, netProceeds: price * (1 - ex.sellingCostPct) - debt, method };
+  return { year, price, netProceeds: price * (1 - ex.sellingCostPct) - debt, method, propertyValue };
 }

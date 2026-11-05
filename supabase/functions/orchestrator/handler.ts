@@ -9,6 +9,7 @@ import { db, getSetting, must, type Budgets } from '../_shared/db.ts';
 import { HttpError } from '../_shared/http.ts';
 import { withRun } from '../_shared/runs.ts';
 import { scoutLocation } from '../_shared/scout.ts';
+import { run as fitScreen } from '../fit-screen/handler.ts';
 
 async function processChangeEvents() {
   const events = must(await db().from('change_events').select('*').is('processed_at', null).limit(200), 'change events');
@@ -30,7 +31,15 @@ async function processChangeEvents() {
   }
   if (pairingIds.size) await db().from('pairings').update({ status: 'approved' }).in('id', [...pairingIds]).in('status', ['analyzed', 'verified']);
   await db().from('change_events').update({ processed_at: new Date().toISOString() }).in('id', events.map((e) => e.id));
-  return { events: events.length, requeued: pairingIds.size };
+  // Re-rank the ideas in places whose values changed (code only, no AI cost).
+  const places = new Set<string>();
+  for (const e of events) {
+    if (e.subject_type !== 'location' || !e.subject_id) continue;
+    const children = must(await db().from('locations').select('id').eq('parent_id', e.subject_id), 'children').map((c: { id: string }) => c.id);
+    (children.length ? children : [e.subject_id]).forEach((id: string) => places.add(id));
+  }
+  for (const id of places) await fitScreen({ location_id: id });
+  return { events: events.length, requeued: pairingIds.size, reranked: places.size };
 }
 
 async function syncApprovals() {
@@ -86,7 +95,7 @@ export async function run(body: Record<string, unknown>) {
       'next pairing',
     );
     if (!next) return { decisions, changes, analysed: null };
-    const analysis = await withRun('analysis', { tokenBudget: budgets.analysis_tokens + budgets.verify_tokens, searchBudget: 6, subjectId: next.id, input: { via: 'orchestrator' } }, (run) =>
+    const analysis = await withRun('analysis', { tokenBudget: budgets.analysis_tokens + budgets.verify_tokens, searchBudget: 6, subjectId: next.id, input: { via: 'orchestrator' }, exclusive: true }, (run) =>
       analyzePairing(run, next.id, { research: true, verify: true }),
     );
     return { decisions, changes, analysed: analysis };
@@ -103,7 +112,7 @@ export async function run(body: Record<string, unknown>) {
       }),
     );
     const pick = ages.sort((a, b) => a.newest - b.newest).slice(0, limit);
-    return withRun('monthly_refresh', { tokenBudget: budgets.location_scout_tokens, searchBudget: 20 * limit, input: body }, async (run) => {
+    return withRun('monthly_refresh', { tokenBudget: budgets.location_scout_tokens, searchBudget: 20 * limit, input: body, exclusive: true }, async (run) => {
       const out: unknown[] = [];
       for (const l of pick) out.push(await scoutLocation(run, l.id));
       return { refreshed: out };

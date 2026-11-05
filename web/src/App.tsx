@@ -7,6 +7,7 @@ import { Locations } from './pages/Locations.tsx';
 import { PairingPage } from './pages/Pairing.tsx';
 import { Review } from './pages/Review.tsx';
 import { Runs } from './pages/Runs.tsx';
+import { Settings } from './pages/Settings.tsx';
 
 const NAV = [
   ['ideas', 'Business ideas'],
@@ -14,6 +15,7 @@ const NAV = [
   ['locations', 'Locations'],
   ['review', 'To review'],
   ['activity', 'Activity'],
+  ['settings', 'Settings'],
 ] as const;
 
 function useHash() {
@@ -87,6 +89,7 @@ export function App() {
         {page === 'locations' && <Locations />}
         {page === 'review' && <Review />}
         {page === 'activity' && <Runs />}
+        {page === 'settings' && <Settings />}
       </main>
     </div>
   );

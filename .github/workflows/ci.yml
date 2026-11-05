@@ -12,6 +12,7 @@ jobs:
       - run: npm install
       - run: npm test
       - run: npx tsc -p tsconfig.json
+      - run: npx tsc -p tsconfig.functions.json
   functions:
     runs-on: ubuntu-latest
     steps:
@@ -28,3 +29,31 @@ jobs:
         with: { node-version: 22 }
       - run: npm install
       - run: npm run build
+  # Deploys the backend from main once every check passes. Needs two repository
+  # secrets: SUPABASE_ACCESS_TOKEN (a personal access token) and SUPABASE_DB_PASSWORD.
+  deploy:
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: [engine, functions, web]
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+      PROJECT_REF: tocukdtdeyarswmngjic
+    steps:
+      - uses: actions/checkout@v4
+      - uses: supabase/setup-cli@v1
+        with: { version: latest }
+      - name: Skip when secrets are not set
+        id: gate
+        run: echo "ready=${{ secrets.SUPABASE_ACCESS_TOKEN != '' }}" >> "$GITHUB_OUTPUT"
+      - if: steps.gate.outputs.ready == 'true'
+        run: supabase link --project-ref "$PROJECT_REF" --password "$SUPABASE_DB_PASSWORD"
+      - if: steps.gate.outputs.ready == 'true'
+        run: supabase db push --password "$SUPABASE_DB_PASSWORD"
+      - if: steps.gate.outputs.ready == 'true'
+        run: supabase functions deploy api --no-verify-jwt --project-ref "$PROJECT_REF"
+      - if: steps.gate.outputs.ready == 'true'
+        name: Smoke test
+        run: |
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "https://$PROJECT_REF.supabase.co/functions/v1/api/fit-screen")
+          test "$code" = "401" || { echo "expected 401 without credentials, got $code"; exit 1; }
