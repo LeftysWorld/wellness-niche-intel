@@ -38,7 +38,7 @@ async function processChangeEvents() {
     const children = must(await db().from('locations').select('id').eq('parent_id', e.subject_id), 'children').map((c: { id: string }) => c.id);
     (children.length ? children : [e.subject_id]).forEach((id: string) => places.add(id));
   }
-  for (const id of places) await fitScreen({ location_id: id });
+  for (const id of places) await fitScreen({ location_id: id }); // queues one job per niche in that place
   return { events: events.length, requeued: pairingIds.size, reranked: places.size };
 }
 

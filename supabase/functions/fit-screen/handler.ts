@@ -1,5 +1,5 @@
-// Fit screen: every written-up niche (in use or still a new idea) × one place
-// (a full re-rank queues one job per place). Pure code, no AI calls. Ideas are dropped only for hard
+// Fit screen: one written-up niche (in use or still a new idea) in one place;
+// a full re-rank queues one job per niche x place. Pure code, no AI calls. Ideas are dropped only for hard
 // reasons (excluded tags, a place that can't support the niche, no residency
 // route); everything else is kept, scored and ranked money-first in the app.
 import { db, defaultProfile, getSetting, must, type Thresholds } from '../_shared/db.ts';
@@ -19,14 +19,16 @@ export async function run(body: Record<string, unknown>) {
   const targetYear = Number(params.target_year ?? 1);
   const target = Number(params.target_monthly_profit_usd ?? 5000);
 
-  // A full re-rank is too much for one call: queue one job per place (they run in parallel).
-  if (!body.location_id) {
-    const { data: queued, error } = await db().rpc('queue_fit_screen', { p_niche: body.niche_id ?? null });
+  // Each call screens one niche in one place; anything wider is queued as one job
+  // per niche x place so every call stays inside the function's compute limit.
+  if (!body.location_id || !body.niche_id) {
+    const { data: queued, error } = await db().rpc('queue_fit_screen', { p_niche: body.niche_id ?? null, p_location: body.location_id ?? null });
     if (error) throw new Error(`Could not queue the re-rank: ${error.message}`);
-    return { queued, note: 'Re-ranking runs in the background, one job per place; results appear within a minute or two.' };
+    return { queued, note: 'Re-ranking runs in the background, one job per idea; results appear within a minute or two.' };
   }
 
-  return withRun('fit_screen', { tokenBudget: 0, searchBudget: 0, profileId: profile.id, subjectId: String(body.location_id), input: body, exclusive: true }, async () => {
+  // Re-ranking only overwrites the same rows, so these small jobs need no lock.
+  return withRun('fit_screen', { tokenBudget: 0, searchBudget: 0, profileId: profile.id, subjectId: String(body.location_id), input: body }, async () => {
     let nq = db().from('niches').select('id,slug,name,status,risk_tags,signal_score,card').in('status', ['approved', 'proposed']);
     if (body.niche_id) nq = nq.eq('id', body.niche_id);
     // deno-lint-ignore no-explicit-any
