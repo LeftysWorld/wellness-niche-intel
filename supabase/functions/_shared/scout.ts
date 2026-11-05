@@ -26,15 +26,19 @@ export async function scoutLocation(run: Run, locationId: string, opts: { keys?:
   if (!keys.length) return { location: location.slug, written: 0, skipped: 'nothing missing or stale' };
 
   const written: string[] = [];
+  const skipped: { key: string; reason: string; note: string }[] = [];
   for (const key of keys) {
     const q = queryFor(key, location);
     const hits = await search(run, q, 6);
-    if (!hits.length) continue;
-    type Out = { found: boolean; value: number; low: number; high: number; unit: string; source_url: string; note: string; confidence: 'high' | 'medium' | 'low' };
+    if (!hits.length) {
+      skipped.push({ key, reason: 'no search results', note: q });
+      continue;
+    }
+    type Out = { found: boolean; value: number; low: number; high: number; unit: string; source_index: number; note: string; confidence: 'high' | 'medium' | 'low' };
     const out = await ask<Out>({
       run,
       model: models.extraction,
-      system: 'You extract one numeric fact from search results with its source. Only use numbers stated in the results. If the results do not support a value, set found=false.',
+      system: 'You extract one numeric fact from search results with its source. Use numbers stated in the results; you may convert currency and units (e.g. hectares to acres, yearly to monthly) and say so in the note. Give a range across the listings you see. If the results do not support a value, set found=false.',
       prompt: [
         `Location: ${location.name} (${location.country_code}).`,
         `Value wanted (${key}): ${KEY_GUIDE[key] ?? key}.`,
@@ -52,17 +56,20 @@ export async function scoutLocation(run: Run, locationId: string, opts: { keys?:
             low: { type: 'number' },
             high: { type: 'number' },
             unit: { type: 'string' },
-            source_url: { type: 'string' },
+            source_index: { type: 'integer', description: 'The [n] of the result the value comes from' },
             note: { type: 'string' },
             confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
           },
-          required: ['found', 'value', 'low', 'high', 'unit', 'source_url', 'note', 'confidence'],
+          required: ['found', 'value', 'low', 'high', 'unit', 'source_index', 'note', 'confidence'],
         },
       },
       maxTokens: 800,
     });
-    const urls = new Set(hits.map((h) => h.url));
-    if (!out.found || !urls.has(out.source_url) || !(out.value > 0)) continue;
+    const source = hits[out.source_index];
+    if (!out.found || !source || !(out.value > 0)) {
+      skipped.push({ key, reason: !out.found ? 'not found in results' : !source ? 'bad source index' : 'non-positive value', note: out.note });
+      continue;
+    }
     const row: NewAssumption = {
       subject_type: 'location',
       subject_id: location.id,
@@ -72,14 +79,14 @@ export async function scoutLocation(run: Run, locationId: string, opts: { keys?:
       high: Math.max(out.high, out.value),
       unit: out.unit,
       currency: key.endsWith('_usd') ? 'USD' : null,
-      source_url: out.source_url,
+      source_url: source.url,
       source_note: out.note,
       confidence: out.confidence,
       stale_after: key.startsWith('lease') || key.startsWith('land') ? '120 days' : '365 days',
     };
     written.push(...(await writeAssumptions(run, 'location-scout', [row])));
   }
-  return { location: location.slug, asked: keys.length, written: written.length };
+  return { location: location.slug, asked: keys.length, written: written.length, skipped };
 }
 
 function queryFor(key: string, l: LocationRow): string {

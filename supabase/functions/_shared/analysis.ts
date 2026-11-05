@@ -23,7 +23,7 @@ async function researchPrices(run: Run, pairingId: string, niche: NicheRow, loca
   ).flat();
   if (!hits.length) return [];
   const fx = await getSetting<{ cop_per_usd?: number }>('currency');
-  type Out = { prices: { stream: string; low: number; mode: number; high: number; source_url: string; note: string; confidence: 'high' | 'medium' | 'low' }[] };
+  type Out = { prices: { stream: string; low: number; mode: number; high: number; source_index: number; note: string; confidence: 'high' | 'medium' | 'low' }[] };
   const out = await ask<Out>({
     run,
     model: models.extraction,
@@ -33,7 +33,7 @@ async function researchPrices(run: Run, pairingId: string, niche: NicheRow, loca
       `Revenue streams to price (USD per unit sold): ${streams.map((s: { key: string; label: string }) => `${s.key} = ${s.label}`).join('; ')}`,
       `Exchange rate: ${fx.cop_per_usd ?? 'n/a'} COP per USD.`,
       `Results:\n${hits.map((h, i) => `[${i}] ${h.url}\n${h.title}\n${h.snippet}`).join('\n\n')}`,
-      'For each stream with at least one comparable local price, give low/typical/high in USD and the best source URL. Skip streams with no evidence.',
+      'For each stream with at least one comparable local price, give low/typical/high in USD and the [n] of the best source. Skip streams with no evidence.',
     ].join('\n\n'),
     tool: {
       name: 'prices',
@@ -50,11 +50,11 @@ async function researchPrices(run: Run, pairingId: string, niche: NicheRow, loca
                 low: { type: 'number' },
                 mode: { type: 'number' },
                 high: { type: 'number' },
-                source_url: { type: 'string' },
+                source_index: { type: 'integer', description: 'The [n] of the result the price comes from' },
                 note: { type: 'string' },
                 confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
               },
-              required: ['stream', 'low', 'mode', 'high', 'source_url', 'note', 'confidence'],
+              required: ['stream', 'low', 'mode', 'high', 'source_index', 'note', 'confidence'],
             },
           },
         },
@@ -64,9 +64,8 @@ async function researchPrices(run: Run, pairingId: string, niche: NicheRow, loca
     maxTokens: 2000,
   });
   const valid = new Set(streams.map((s: { key: string }) => s.key));
-  const urls = new Set(hits.map((h) => h.url));
   const rows: NewAssumption[] = out.prices
-    .filter((p) => valid.has(p.stream) && urls.has(p.source_url) && p.mode > 0 && p.low <= p.mode && p.mode <= p.high)
+    .filter((p) => valid.has(p.stream) && hits[p.source_index] && p.mode > 0 && p.low <= p.mode && p.mode <= p.high)
     .map((p) => ({
       subject_type: 'pairing',
       subject_id: pairingId,
@@ -76,7 +75,7 @@ async function researchPrices(run: Run, pairingId: string, niche: NicheRow, loca
       high: p.high,
       unit: 'per_sale',
       currency: 'USD',
-      source_url: p.source_url,
+      source_url: hits[p.source_index].url,
       source_note: p.note,
       confidence: p.confidence,
       stale_after: '120 days',
