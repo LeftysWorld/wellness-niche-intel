@@ -60,6 +60,7 @@ export async function run(body: Record<string, unknown>) {
             scores: {
               ...s.scores,
               tenure: best.tenure,
+              staffed: best.build.staffed,
               startup_p50: round2(best.result.startup.total.p50),
               target_year_profit_p50: round2(snapshotFor(best.result, Number(params.target_year ?? 1)).profit.p50),
               fundable: best.result.startup.fundable,
