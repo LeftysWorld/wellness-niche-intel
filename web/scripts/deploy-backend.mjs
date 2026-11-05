@@ -20,16 +20,30 @@ if (!env.SUPABASE_ACCESS_TOKEN) {
   process.exit(0);
 }
 
-const run = (cmd) => {
-  console.log(`[backend] ${cmd.replace(/--password \S+/, '--password ***')}`);
-  execSync(cmd, { cwd: root, stdio: 'inherit', env });
+// Secrets never go on a command line: the Supabase CLI reads SUPABASE_ACCESS_TOKEN
+// and SUPABASE_DB_PASSWORD from the environment, and a failed command's error
+// (which repeats the command) is replaced by a short message with secrets masked.
+const secrets = [env.SUPABASE_ACCESS_TOKEN, env.SUPABASE_DB_PASSWORD].filter(Boolean);
+const mask = (text) => secrets.reduce((t, s) => t.split(s).join('***'), String(text));
+const run = (cmd, { soft = false } = {}) => {
+  console.log(`[backend] ${mask(cmd)}`);
+  try {
+    // "y" answers any confirmation prompt; the build has no terminal.
+    execSync(cmd, { cwd: root, stdio: ['pipe', 'inherit', 'inherit'], input: 'y\n', env });
+    return true;
+  } catch (e) {
+    console.error(`[backend] failed (exit ${e.status ?? '?'}): ${mask(cmd)}`);
+    if (soft) return false;
+    process.exit(1);
+  }
 };
 const cli = 'npx -y supabase@latest';
 const sha = env.VERCEL_GIT_COMMIT_SHA ?? 'unknown';
 
 if (env.SUPABASE_DB_PASSWORD) {
-  run(`${cli} link --project-ref ${PROJECT_REF} --password ${env.SUPABASE_DB_PASSWORD}`);
-  run(`${cli} db push --password ${env.SUPABASE_DB_PASSWORD}`);
+  run(`${cli} link --project-ref ${PROJECT_REF}`);
+  // Newer CLIs target the linked project with --remote; older ones with --linked.
+  if (!run(`${cli} db push --remote`, { soft: true })) run(`${cli} db push --linked`);
 } else {
   console.log('[backend] SUPABASE_DB_PASSWORD is not set; skipping migrations.');
 }
