@@ -1,0 +1,73 @@
+:root {
+  --bg: #f6f5f2;
+  --card: #fff;
+  --ink: #1d1f1c;
+  --muted: #6b6f68;
+  --line: #e3e1db;
+  --accent: #2f5d50;
+  --ok: #2c7a4b;
+  --err: #b23b2e;
+  font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  color: var(--ink);
+  background: var(--bg);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #151715;
+    --card: #1e211e;
+    --ink: #e8e6e0;
+    --muted: #9a9e96;
+    --line: #333733;
+    --accent: #7fb8a4;
+    --ok: #6cc28f;
+    --err: #ef8a7c;
+  }
+}
+body { margin: 0; }
+a { color: var(--accent); }
+.shell nav {
+  display: flex; gap: 1rem; align-items: center; padding: 0.75rem 1.25rem;
+  border-bottom: 1px solid var(--line); background: var(--card); position: sticky; top: 0; z-index: 1; flex-wrap: wrap;
+}
+.shell nav a { text-decoration: none; color: var(--muted); }
+.shell nav a.active { color: var(--ink); font-weight: 600; }
+.spacer { flex: 1; }
+main { padding: 1.25rem; max-width: 1400px; margin: 0 auto; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 1rem 1.25rem; margin-bottom: 1rem; overflow-x: auto; }
+.card-head { display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; }
+.card-head h2 { font-size: 1.1rem; margin: 0.25rem 0; }
+.actions { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
+table { border-collapse: collapse; width: 100%; font-size: 0.9rem; margin: 0.5rem 0; }
+th, td { text-align: left; padding: 0.4rem 0.5rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--muted); font-weight: 500; }
+td:nth-child(n + 2) { font-variant-numeric: tabular-nums; }
+button { font: inherit; padding: 0.35rem 0.75rem; border-radius: 6px; border: 1px solid var(--line); background: var(--card); color: var(--ink); cursor: pointer; }
+button:hover { border-color: var(--accent); }
+button.link { border: none; padding: 0; color: var(--accent); background: none; }
+button:disabled { opacity: 0.6; cursor: wait; }
+input, select { font: inherit; padding: 0.35rem 0.5rem; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--ink); }
+.muted { color: var(--muted); }
+.small { font-size: 0.8rem; }
+.ok { color: var(--ok); }
+.err { color: var(--err); }
+.run small { margin-left: 0.4rem; }
+.pill { display: inline-block; font-size: 0.75rem; padding: 0.1rem 0.5rem; border-radius: 99px; background: var(--line); }
+.pill.verified, .pill.approved, .pill.succeeded { background: color-mix(in srgb, var(--ok) 20%, transparent); }
+.pill.rejected, .pill.screened_out, .pill.failed { background: color-mix(in srgb, var(--err) 20%, transparent); }
+.pill.awaiting_approval, .pill.budget_exceeded { background: color-mix(in srgb, #d9a53b 30%, transparent); }
+.filters { display: flex; gap: 1rem; flex-wrap: wrap; margin: 0.5rem 0; font-size: 0.85rem; }
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 0.75rem; margin: 0.75rem 0; }
+.kpis > div { border: 1px solid var(--line); border-radius: 8px; padding: 0.6rem 0.75rem; display: flex; flex-direction: column; gap: 0.15rem; }
+.kpis b { font-size: 1.2rem; }
+.kpis small { color: var(--muted); }
+.warnings li { color: var(--err); }
+.sliders { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0.75rem 1.5rem; margin: 0.5rem 0 1rem; }
+.slider { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.9rem; }
+.queue { list-style: none; padding: 0; }
+.queue li { display: flex; gap: 0.75rem; align-items: center; padding: 0.6rem 0; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.queue .summary { flex: 1; min-width: 300px; }
+tr.stale td { opacity: 0.6; }
+pre { font-size: 0.75rem; max-height: 320px; overflow: auto; background: var(--bg); padding: 0.75rem; border-radius: 6px; }
+.login { max-width: 360px; margin: 15vh auto; display: flex; flex-direction: column; gap: 1rem; }
+.login form { display: flex; flex-direction: column; gap: 0.5rem; }
+.digest { border-top: 1px solid var(--line); padding-top: 0.5rem; }

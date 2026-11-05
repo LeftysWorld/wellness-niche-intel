@@ -1,0 +1,19 @@
+{
+  "name": "wellness-niche-intel",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Finds land- and structure-based wellness business niches, matches them to locations, and models startup cost, profit and exit value.",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "test": "node --test tests/*.test.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "typecheck:functions": "tsc -p tsconfig.functions.json"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "@types/node": "^22.10.0"
+  }
+}
