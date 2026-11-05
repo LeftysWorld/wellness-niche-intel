@@ -139,29 +139,30 @@ async function draftNiche(run: Run, models: Models, nicheId: string) {
     `Search results:\n${hits.map((h, i) => `[${i}] ${h.url}\n  ${h.title}: ${clip(h.snippet, 400)}`).join('\n')}`,
   ].join('\n\n');
 
-  const describe = await ask<Describe>({
+  // The two calls are independent, so run them side by side.
+  const [describe, economics] = await Promise.all([
+  ask<Describe>({
     run,
     model: models.judgment,
     system: 'You describe small wellness businesses that need land or a dedicated structure, for someone deciding which to start. Be concrete and plain. Use only what the material supports.',
     prompt: `${context}\n\nDescribe this niche. Under operating_examples list real businesses of this kind you can see in the results, citing the [n].`,
     tool: { name: 'niche_description', description: 'A description of the niche', schema: DESCRIBE_SCHEMA },
     maxTokens: 4000,
-  });
-
-  const economics = await ask<Economics>({
+  }),
+  ask<Economics>({
     run,
     model: models.judgment,
     system:
       'You design unit economics for small wellness businesses tied to land or a structure, for a solo owner-operator with $100-150k. Use the evidence given plus conservative industry norms; prefer wide ranges to false precision. All money in USD at a rural western North Carolina baseline.',
     prompt: [
       context,
-      `How it works: ${describe.summary} Revenue: ${describe.revenue_units}; ${describe.price_model}. Structures: ${describe.structures}.`,
       `Reference economics for a different niche, to show the expected shape and scale:\n${clip(JSON.stringify(reference?.card?.model ?? {}), 3000)}`,
       'Give the economics. A stream with one unit and one sale a month is a flat monthly revenue line. wageMultiple is a multiple of one full-time local wage. Include a lease deposit startup item (leaseMonths 2, applies lease) and mark items own/lease where they differ (buildings are "own"; converting a leased house is "lease").',
     ].join('\n\n'),
     tool: { name: 'niche_economics', description: 'Unit economics and start-up costs', schema: ECONOMICS_SCHEMA },
-    maxTokens: 6000,
-  });
+    maxTokens: 12000,
+  }),
+  ]);
 
   const { model, template } = toModelAndTemplate(economics);
   const problems = smokeTest(model, template);

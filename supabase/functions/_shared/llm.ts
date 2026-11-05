@@ -42,7 +42,7 @@ export async function ask<T>(opts: AskOptions): Promise<T> {
         max_tokens: maxTokens,
         system: constrained
           ? `${opts.system}\n\nReply with JSON only: ${opts.tool.description}.`
-          : `${opts.system}\n\nReply with a single JSON object only (no prose, no code fences): ${opts.tool.description}. It must match this JSON schema, with every listed field present:\n${JSON.stringify(schema)}`,
+          : `${opts.system}\n\nReply with a single compact JSON object only (minified on one line: no prose, no code fences, no indentation): ${opts.tool.description}. It must match this JSON schema, with every listed field present:\n${JSON.stringify(schema)}`,
         messages: [{ role: 'user', content: opts.prompt }],
         ...(constrained ? { output_config: { format: { type: 'json_schema', schema } } } : {}),
       }),
