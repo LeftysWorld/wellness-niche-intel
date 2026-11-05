@@ -1,7 +1,8 @@
 // Niche discovery, two modes:
-//   mode=draft (default): for proposed niches that have enough examples (or a
-//     given niche_id), research and draft a model card and cost template, test
-//     them through the engine, and put the niche in front of the owner.
+//   mode=draft (default): for proposed niches not yet written up (or a given
+//     niche_id), search for real examples, describe the niche, draft its
+//     economics and cost template, test them through the engine, and put the
+//     niche in front of the owner.
 //   mode=brainstorm: search broadly for land-based wellness concepts and add
 //     any not already in the library as proposed niches.
 import { db, getSetting, must, type Budgets, type Models } from '../_shared/db.ts';
@@ -13,112 +14,87 @@ import { search } from '../_shared/search.ts';
 
 const tri = { type: 'object', properties: { low: { type: 'number' }, mode: { type: 'number' }, high: { type: 'number' } }, required: ['low', 'mode', 'high'] };
 
-const CARD_SCHEMA = {
-  type: 'object' as const,
-  properties: {
-    summary: { type: 'string', description: 'Two or three plain sentences: what the guest gets and how the business makes money' },
-    why_interesting: { type: 'string', description: 'Why this could work now: demand, trend, gap in supply' },
-    unique_angle: { type: 'string', description: 'What makes it different from an ordinary retreat or spa' },
-    operating_examples: {
-      type: 'array',
-      description: 'Real businesses of this kind found in the search results',
-      items: {
-        type: 'object',
-        properties: { name: { type: 'string' }, locality: { type: 'string' }, country: { type: 'string' }, source_index: { type: 'integer' }, note: { type: 'string' } },
-        required: ['name', 'locality', 'country', 'source_index', 'note'],
-      },
-    },
-    structures: { type: 'string' },
-    revenue_units: { type: 'string' },
-    price_model: { type: 'string' },
-    staffing: { type: 'string' },
-    permits: { type: 'array', items: { type: 'string' } },
-    demand_drivers: { type: 'array', items: { type: 'string' } },
-    competitor_terms: { type: 'array', items: { type: 'string' } },
-    risk_tags: { type: 'array', items: { type: 'string' }, description: 'Use psychedelic or medical_license when the business needs them' },
-    min_land_acres: { type: 'number' },
-    model: {
-      type: 'object',
-      description: 'US-baseline economics in USD (rural western North Carolina = 1.0 price and build index)',
-      properties: {
-        ownerFixedHours: { type: 'number' },
-        variablePct: tri,
-        requiresPopulation: { type: 'boolean', description: 'true if most revenue is local day visits' },
-        streams: {
-          type: 'array',
-          items: {
-            type: 'object',
-            properties: {
-              key: { type: 'string' },
-              label: { type: 'string' },
-              units: { type: 'number' },
-              sellablePerUnitPerMonth: { type: 'number' },
-              price: tri,
-              startOccupancy: tri,
-              matureOccupancy: tri,
-              monthsToMature: tri,
-              ownerHoursPerSale: { type: 'number' },
-            },
-            required: ['key', 'label', 'units', 'sellablePerUnitPerMonth', 'price', 'startOccupancy', 'matureOccupancy', 'monthsToMature'],
-          },
-        },
-        perSale: {
-          type: 'array',
-          description: 'Cost per unit sold, per stream (food, linens, consumables)',
-          items: { type: 'object', properties: { stream: { type: 'string' }, usd: tri, scale: { type: 'string', enum: ['price', 'none'] } }, required: ['stream', 'usd', 'scale'] },
-        },
-        fixed: {
-          type: 'array',
-          items: {
-            type: 'object',
-            properties: { key: { type: 'string' }, label: { type: 'string' }, usd: tri, scale: { type: 'string', enum: ['price', 'none'] }, applies: { type: 'string', enum: ['own', 'lease', 'both'] } },
-            required: ['key', 'label', 'usd', 'scale', 'applies'],
-          },
-        },
-        staffing: {
-          type: 'array',
-          items: {
-            type: 'object',
-            properties: { key: { type: 'string' }, label: { type: 'string' }, wageMultiple: tri, fromMonth: { type: 'number' } },
-            required: ['key', 'label', 'wageMultiple'],
-          },
-        },
-        exit: {
-          type: 'object',
-          properties: { sdeMultiple: tri, ebitdaMultiple: tri, managerWageMultiple: { type: 'number' } },
-          required: ['sdeMultiple', 'ebitdaMultiple', 'managerWageMultiple'],
-        },
-      },
-      required: ['ownerFixedHours', 'variablePct', 'streams', 'perSale', 'fixed', 'staffing', 'exit'],
-    },
-    template: {
-      type: 'object',
-      properties: {
-        land_acres: { type: 'number' },
-        items: {
-          type: 'array',
-          items: {
-            type: 'object',
-            properties: {
-              key: { type: 'string' },
-              label: { type: 'string' },
-              qty: { type: 'number' },
-              qtyFrom: { type: 'string', description: 'stream key whose unit count sets the quantity' },
-              usd: tri,
-              scale: { type: 'string', enum: ['build', 'equipment', 'none'] },
-              applies: { type: 'string', enum: ['own', 'lease', 'both'] },
-              leaseMonths: { type: 'number', description: 'only for a lease deposit item; no usd' },
-            },
-            required: ['key', 'label', 'applies'],
-          },
-        },
-      },
-      required: ['land_acres', 'items'],
-    },
-    sources: { type: 'array', items: { type: 'string' } },
+const str = { type: 'string' };
+const strs = { type: 'array', items: str };
+const num = { type: 'number' };
+const obj = (properties: Record<string, unknown>) => ({ type: 'object' as const, properties, required: Object.keys(properties) });
+
+// Two compact schemas instead of one large one: structured outputs compile
+// each schema to a grammar, and every field required keeps that grammar small.
+const DESCRIBE_SCHEMA = obj({
+  summary: { ...str, description: 'Two or three plain sentences: what the guest gets and how the business makes money' },
+  why_interesting: { ...str, description: 'Why this could work now: demand, trend, gap in supply' },
+  unique_angle: { ...str, description: 'One sentence: what makes it different from an ordinary retreat or spa' },
+  structures: str,
+  revenue_units: str,
+  price_model: str,
+  staffing: str,
+  permits: strs,
+  demand_drivers: strs,
+  competitor_terms: strs,
+  risk_tags: { ...strs, description: 'Include psychedelic or medical_license if the business needs them; otherwise empty' },
+  operating_examples: { type: 'array', items: obj({ name: str, locality: str, country: str, source_index: { type: 'integer' }, note: str }) },
+});
+
+const ECONOMICS_SCHEMA = obj({
+  ownerFixedHours: num,
+  variablePct: tri,
+  requiresPopulation: { type: 'boolean', description: 'true if most revenue is local day visits' },
+  streams: {
+    type: 'array',
+    items: obj({ key: str, label: str, units: num, sellablePerUnitPerMonth: num, price: tri, startOccupancy: tri, matureOccupancy: tri, monthsToMature: tri, ownerHoursPerSale: num }),
   },
-  required: ['summary', 'why_interesting', 'unique_angle', 'operating_examples', 'structures', 'revenue_units', 'price_model', 'staffing', 'competitor_terms', 'risk_tags', 'model', 'template', 'sources'],
+  perSale: { type: 'array', items: obj({ stream: str, usd: tri, scale: { type: 'string', enum: ['price', 'none'] } }) },
+  fixed: { type: 'array', items: obj({ key: str, label: str, usd: tri, scale: { type: 'string', enum: ['price', 'none'] }, applies: { type: 'string', enum: ['own', 'lease', 'both'] } }) },
+  staffing: { type: 'array', items: obj({ key: str, label: str, wageMultiple: tri, fromMonth: num }) },
+  exit: obj({ sdeMultiple: tri, ebitdaMultiple: tri, managerWageMultiple: num }),
+  land_acres: num,
+  startup_items: {
+    type: 'array',
+    description: 'One-off costs. qty: count, or 0 when qtyFrom names a stream whose unit count sets it. leaseMonths: only for the lease deposit item (usd ignored), else 0.',
+    items: obj({
+      key: str,
+      label: str,
+      qty: num,
+      qtyFrom: str,
+      usd: tri,
+      scale: { type: 'string', enum: ['build', 'equipment', 'none'] },
+      applies: { type: 'string', enum: ['own', 'lease', 'both'] },
+      leaseMonths: num,
+    }),
+  },
+});
+
+type Describe = {
+  summary: string; why_interesting: string; unique_angle: string; structures: string; revenue_units: string; price_model: string; staffing: string;
+  permits: string[]; demand_drivers: string[]; competitor_terms: string[]; risk_tags: string[];
+  operating_examples: { name: string; locality: string; country: string; source_index: number; note: string }[];
 };
+// deno-lint-ignore no-explicit-any
+type Economics = any;
+
+/** Map the flat economics reply onto the model card and cost template the engine uses. */
+export function toModelAndTemplate(e: Economics): { model: NicheModelSpec; template: CostTemplate } {
+  const model: NicheModelSpec = {
+    ownerFixedHours: e.ownerFixedHours,
+    variablePct: e.variablePct,
+    requiresPopulation: e.requiresPopulation,
+    streams: e.streams,
+    perSale: Object.fromEntries((e.perSale ?? []).map((p: { stream: string; usd: unknown; scale: string }) => [p.stream, { usd: p.usd, scale: p.scale }])),
+    fixed: e.fixed,
+    staffing: (e.staffing ?? []).map((s: { fromMonth: number }) => ({ ...s, fromMonth: Math.max(1, Math.round(s.fromMonth || 1)) })),
+    exit: e.exit,
+  };
+  const template: CostTemplate = {
+    land_acres: e.land_acres,
+    items: (e.startup_items ?? []).map((i: { key: string; label: string; qty: number; qtyFrom: string; usd: unknown; scale: string; applies: string; leaseMonths: number }) =>
+      i.leaseMonths > 0
+        ? { key: i.key, label: i.label, applies: i.applies, leaseMonths: i.leaseMonths }
+        : { key: i.key, label: i.label, applies: i.applies, usd: i.usd, scale: i.scale, ...(i.qtyFrom ? { qtyFrom: i.qtyFrom } : { qty: i.qty || 1 }) },
+    ),
+  };
+  return { model, template };
+}
 
 /** Run the drafted card through the engine with a neutral US ledger to catch broken drafts. */
 function smokeTest(model: NicheModelSpec, template: CostTemplate): string[] {
@@ -157,30 +133,39 @@ async function draftNiche(run: Run, models: Models, nicheId: string) {
     ...(await search(run, `how much does it cost to build ${niche.name} startup cost`, 6)),
   ].filter((h) => !seen.has(h.url) && seen.add(h.url));
   const reference = must(await db().from('niches').select('card').eq('slug', 'dark-retreat').maybeSingle(), 'reference card');
-  const draft = await ask<Record<string, unknown> & { model: NicheModelSpec; template: CostTemplate; risk_tags: string[]; unique_angle?: string; operating_examples?: { name: string; locality: string; country: string; source_index: number; note: string }[] }>({
+  const context = [
+    `Niche: ${niche.name}${niche.card?.description ? ` — ${niche.card.description}` : ''}${niche.card?.note ? ` — ${niche.card.note}` : ''}`,
+    `Known operating examples:\n${examples.map((e) => `- ${e.name} (${e.locality}, ${e.country}) ${e.url}: ${clip(e.description ?? '', 300)} prices=${JSON.stringify(e.prices)}`).join('\n') || '(none)'}`,
+    `Search results:\n${hits.map((h, i) => `[${i}] ${h.url}\n  ${h.title}: ${clip(h.snippet, 400)}`).join('\n')}`,
+  ].join('\n\n');
+
+  const describe = await ask<Describe>({
+    run,
+    model: models.judgment,
+    system: 'You describe small wellness businesses that need land or a dedicated structure, for someone deciding which to start. Be concrete and plain. Use only what the material supports.',
+    prompt: `${context}\n\nDescribe this niche. Under operating_examples list real businesses of this kind you can see in the results, citing the [n].`,
+    tool: { name: 'niche_description', description: 'A description of the niche', schema: DESCRIBE_SCHEMA },
+    maxTokens: 4000,
+  });
+
+  const economics = await ask<Economics>({
     run,
     model: models.judgment,
     system:
-      'You design unit economics for small wellness businesses tied to land or a structure, for a solo owner-operator with $100-150k. Use only evidence in the material given plus conservative industry norms; prefer wide ranges to false precision. All money in USD at a rural western North Carolina baseline.',
+      'You design unit economics for small wellness businesses tied to land or a structure, for a solo owner-operator with $100-150k. Use the evidence given plus conservative industry norms; prefer wide ranges to false precision. All money in USD at a rural western North Carolina baseline.',
     prompt: [
-      `Niche: ${niche.name}${niche.card?.description ? ` — ${niche.card.description}` : ''}${niche.card?.note ? ` — ${niche.card.note}` : ''}`,
-      `Known operating examples:\n${examples.map((e) => `- ${e.name} (${e.locality}, ${e.country}) ${e.url}: ${clip(e.description ?? '', 300)} prices=${JSON.stringify(e.prices)}`).join('\n') || '(none)'}`,
-      `Search results:\n${hits.map((h, i) => `[${i}] ${h.url}\n  ${h.title}: ${clip(h.snippet, 400)}`).join('\n')}`,
-      `Reference card for a different niche, to show the expected shape and scale:\n${clip(JSON.stringify(reference?.card?.model ?? {}), 3500)}`,
-      'Draft the card. List real operating businesses you can see in the results under operating_examples (cite the [n]). Streams with one unit and one sale a month are flat monthly revenue lines. Template items: build-scaled for construction, equipment-scaled for kit; include a lease deposit item (leaseMonths) and items marked own/lease where they differ. List the URLs you relied on in sources.',
+      context,
+      `How it works: ${describe.summary} Revenue: ${describe.revenue_units}; ${describe.price_model}. Structures: ${describe.structures}.`,
+      `Reference economics for a different niche, to show the expected shape and scale:\n${clip(JSON.stringify(reference?.card?.model ?? {}), 3000)}`,
+      'Give the economics. A stream with one unit and one sale a month is a flat monthly revenue line. wageMultiple is a multiple of one full-time local wage. Include a lease deposit startup item (leaseMonths 2, applies lease) and mark items own/lease where they differ (buildings are "own"; converting a leased house is "lease").',
     ].join('\n\n'),
-    tool: { name: 'niche_card', description: 'The drafted niche card', schema: CARD_SCHEMA },
-    maxTokens: 10000,
+    tool: { name: 'niche_economics', description: 'Unit economics and start-up costs', schema: ECONOMICS_SCHEMA },
+    maxTokens: 6000,
   });
 
-  // The schema returns per-sale costs as a list; the engine wants a map by stream.
-  // deno-lint-ignore no-explicit-any
-  const perSaleList = (draft.model as any).perSale;
-  if (Array.isArray(perSaleList)) {
-    draft.model.perSale = Object.fromEntries(perSaleList.map((p: { stream: string; usd: unknown; scale: string }) => [p.stream, { usd: p.usd, scale: p.scale }])) as NicheModelSpec['perSale'];
-  }
-  const problems = smokeTest(draft.model, draft.template);
-  const { model, template, risk_tags, operating_examples, ...rest } = draft;
+  const { model, template } = toModelAndTemplate(economics);
+  const problems = smokeTest(model, template);
+  const { risk_tags, operating_examples, ...rest } = describe;
   let examplesAdded = 0;
   for (const ex of operating_examples ?? []) {
     const src = hits[ex.source_index];
@@ -192,7 +177,7 @@ async function draftNiche(run: Run, models: Models, nicheId: string) {
     if (!error) examplesAdded++;
   }
   if (examplesAdded) await db().rpc('refresh_niche_signals');
-  const card = { ...(niche.card ?? {}), ...rest, model: { ...model, basis: 'AI draft from examples and search results; review before approving.' }, drafted_by_run: run.id, smoke_test: problems };
+  const card = { ...(niche.card ?? {}), ...rest, sources: hits.map((h) => h.url), model: { ...model, basis: 'AI draft from examples and search results; review before approving.' }, drafted_by_run: run.id, smoke_test: problems };
   await db().from('niches').update({ card, risk_tags: risk_tags ?? [] }).eq('id', nicheId);
   if (!problems.length) {
     const last = must(await db().from('cost_templates').select('version').eq('niche_id', nicheId).order('version', { ascending: false }).limit(1).maybeSingle(), 'template version');
@@ -204,7 +189,7 @@ async function draftNiche(run: Run, models: Models, nicheId: string) {
     summary: problems.length
       ? `${niche.name}: draft card failed checks (${problems.join('; ')}). Needs more research.`
       : `${niche.name}: ${rest.unique_angle ?? 'drafted'} (${examples.length + examplesAdded} operating examples). Approve to pair it with your places.`,
-    payload: { risk_tags, streams: model.streams?.map((s) => s.label), sources: rest.sources },
+    payload: { risk_tags, streams: model.streams?.map((s) => s.label) },
   });
   return { niche: niche.slug, ok: problems.length === 0, problems, examplesAdded };
 }
@@ -236,15 +221,25 @@ async function brainstorm(run: Run, models: Models) {
     },
     maxTokens: 2500,
   });
-  let added = 0;
-  for (const idea of out.ideas.filter((i) => hits[i.source_index])) {
-    const [match] = must(await db().rpc('match_niches', { q: idea.name, min_similarity: 0.35, max_rows: 1 }), 'match');
-    if (match) continue;
-    const slug = idea.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 60);
-    const { error } = await db().from('niches').insert({ slug, name: idea.name, family: 'brainstorm', status: 'proposed', card: { description: idea.description, discovered_from: hits[idea.source_index].url } });
-    if (!error) added++;
+  const added: string[] = [];
+  const skipped: string[] = [];
+  for (const idea of out.ideas) {
+    const source = hits[idea.source_index];
+    if (!source) {
+      skipped.push(`${idea.name} (no source)`);
+      continue;
+    }
+    const [match] = must(await db().rpc('match_niches', { q: idea.name, min_similarity: 0.55, max_rows: 1 }), 'match');
+    if (match) {
+      skipped.push(`${idea.name} (same as ${match.name})`);
+      continue;
+    }
+    const slug = idea.name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 60);
+    const { error } = await db().from('niches').insert({ slug, name: idea.name, family: 'brainstorm', status: 'proposed', card: { description: idea.description, discovered_from: source.url } });
+    if (error) skipped.push(`${idea.name} (${error.message})`);
+    else added.push(idea.name);
   }
-  return { ideas: out.ideas.length, added };
+  return { ideas: out.ideas.length, added, skipped };
 }
 
 export async function run(body: Record<string, unknown>) {
