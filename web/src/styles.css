@@ -99,5 +99,3 @@ textarea { font: inherit; width: 100%; box-sizing: border-box; padding: 0.6rem; 
 .banner.warn { border-color: #d9a53b; background: color-mix(in srgb, #d9a53b 12%, transparent); }
 .settings label { display: flex; flex-direction: column; gap: 0.25rem; margin: 0.6rem 0; max-width: 420px; }
 .settings .row { display: flex; gap: 1.5rem; flex-wrap: wrap; }
-.fill { display: inline-flex; gap: 0.25rem; }
-.fill input { width: 7rem; }

@@ -35,6 +35,9 @@ orchestrator     tick: apply approvals, re-queue pairings hit by changed values,
 | Dashboard (Vite + React) | `web/` |
 | Tests | `tests/` (`npm test`) |
 
+### Evidence is gathered automatically
+Nothing waits for the owner to supply data. The location scout collects every figure it can find for a value across several searches, checks each quote against its page, drops outliers, and writes the median; confidence comes from how many separate sites agree (3+ agreeing sites = high). A value it can't find is retried with a different strategy each time (listing searches, then official statistics and listing portals, then the wider region), then again monthly. The daily refresh goes to the places with the most estimated or missing values first.
+
 ### The assumption ledger
 Every number the model uses (land price, lease, wages, taxes, prices, occupancy…) is a row in `assumptions` with a source, confidence and staleness window. Rows are never edited: a new row supersedes the old one, and if the value moves by more than 5% a `change_events` row is written. The orchestrator re-queues every analysis that depended on it. Scope wins from most to least specific: pairing → micro-area → country → global.
 
@@ -107,4 +110,3 @@ Step 3 needs two Vercel environment variables, Production only, marked Sensitive
 ## Changing the defaults
 - Your goals, capital, regions and exclusions: `parameter_profiles` ("Robby — default").
 - Models, budgets, thresholds, discovery queries: `settings`.
-- A number you know better than the agents: Ledger → *Override*. It's recorded as `written_by = user` and triggers re-analysis.

@@ -1,12 +1,17 @@
-// Location scout: fills missing or stale ledger values for one location by
-// searching and extracting sourced numbers. Only values with a source URL
-// that came back in the search results are written.
+// Location scout: fills missing, stale or estimated ledger values for one
+// location, fully automatically. Each value is gathered from several sources,
+// each quote is checked against its page, and the median of the confirmed
+// figures is written with a confidence set by how many separate sites agree.
 import { db, getSetting, must, type Models } from './db.ts';
 import { fetchText } from './search.ts';
 import { KEY_GUIDE, REQUIRED_LOCATION_KEYS, writeAssumptions, type LocationRow, type NewAssumption } from './ledger.ts';
 import { ask } from './llm.ts';
 import type { Run } from './runs.ts';
-import { search } from './search.ts';
+import { search, type SearchHit } from './search.ts';
+import { consensus, type Observation } from './consensus.ts';
+
+/** Values that belong to a country; everything else belongs to a place within it. */
+export const COUNTRY_KEYS = new Set(['tax.revenue_pct', 'tax.income_effective_pct', 'exit.country_discount', 'labor.monthly_wage_usd', 'finance.rate_pct']);
 
 export async function scoutLocation(run: Run, locationId: string, opts: { keys?: string[]; force?: boolean } = {}) {
   const models = await getSetting<Models & { numbers?: string }>('models');
@@ -22,86 +27,113 @@ export async function scoutLocation(run: Run, locationId: string, opts: { keys?:
     return opts.force || !c || c.is_stale || String(c.written_by).includes('estimate');
   });
   // Country-level keys belong on the country; micro-area keys on the micro-area.
-  const countryOnly = new Set(['tax.revenue_pct', 'tax.income_effective_pct', 'exit.country_discount', 'labor.monthly_wage_usd', 'finance.rate_pct']);
-  // Values the scout failed to find twice in the last 60 days wait for the owner instead of costing searches daily.
+  const countryOnly = COUNTRY_KEYS;
+  // Fully automated: a value the scout can't find is retried with a different
+  // search strategy each time; after three failed strategies it waits a month,
+  // then starts the cycle again. Nothing is handed to the owner.
   const misses = ((location.profile?.scout_misses ?? {}) as Record<string, { count: number; last: string }>);
-  const backedOff = (k: string) => {
+  const resting = (k: string) => {
     const m = misses[k];
-    return !opts.force && m && m.count >= 2 && Date.now() - Date.parse(m.last) < 60 * 86_400_000;
+    return !opts.force && m && m.count > 0 && m.count % 3 === 0 && Date.now() - Date.parse(m.last) < 30 * 86_400_000;
   };
-  const keys = wanted.filter((k) => (location.level === 'country' ? countryOnly.has(k) : !countryOnly.has(k)) && !backedOff(k));
+  const keys = wanted.filter((k) => (location.level === 'country' ? countryOnly.has(k) : !countryOnly.has(k)) && !resting(k));
   if (!keys.length) return { location: location.slug, written: 0, skipped: 'nothing missing or stale' };
 
+  const country = location.parent_id
+    ? (must(await db().from('locations').select('name').eq('id', location.parent_id).maybeSingle(), 'country')?.name as string | undefined)
+    : undefined;
   const written: string[] = [];
   const skipped: { key: string; reason: string; note: string }[] = [];
+  const squash = (t: string) => t.toLowerCase().replace(/\s+/g, ' ').trim();
+
   for (const key of keys) {
-    const q = queryFor(key, location);
-    // Two searches per value: the local-language query and an English one.
+    const attempt = misses[key]?.count ?? 0;
+    const queries = strategy(key, location, country, attempt);
     const seen = new Set<string>();
-    const hits = [...(await search(run, q, 6)), ...(await search(run, `${KEY_GUIDE[key] ?? key} ${location.name}`, 5))].filter((h) => !seen.has(h.url) && seen.add(h.url));
+    const hits: SearchHit[] = [];
+    for (const q of queries) for (const h of await search(run, q, 8)) if (!seen.has(h.url) && seen.add(h.url)) hits.push(h);
     if (!hits.length) {
-      skipped.push({ key, reason: 'no search results', note: q });
+      skipped.push({ key, reason: 'no search results', note: queries.join(' | ') });
+      misses[key] = { count: attempt + 1, last: new Date().toISOString() };
       continue;
     }
-    type Out = { found: boolean; value: number; low: number; high: number; unit: string; source_index: number; quote: string; note: string; confidence: 'high' | 'medium' | 'low' };
+    type Out = { found: boolean; unit: string; note: string; values: { value: number; source_index: number; quote: string }[] };
     const out = await ask<Out>({
       run,
       // Numbers feed the money model directly, so they get the mid-tier model.
       model: models.numbers ?? models.judgment,
-      system: 'You extract one numeric fact from search results with its source. Use numbers stated in the results; you may convert currency and units (e.g. hectares to acres, yearly to monthly) and say so in the note. Give a range across the listings you see. The description of the value is a target, not a filter: if the closest evidence differs (fewer bedrooms, smaller or larger lots, a nearby town), still report it, set confidence to low, and say in the note how it differs and which way it likely biases the number. Set found=false only when nothing in the results is about this value in or near this place.',
+      system:
+        'You extract every figure for one value from search results, each with its source and an exact quote. Report one entry per listing, statistic or source (not one summary figure). Convert currency and units to what is asked (e.g. hectares to acres, yearly to monthly) and say how in the note. Use figures about this place or the closest comparable nearby. Set found=false only when nothing in the results is about this value.',
       prompt: [
-        `Location: ${location.name} (${location.country_code}).`,
+        `Location: ${location.name}${country ? `, ${country}` : ''} (${location.country_code}).`,
         `Value wanted (${key}): ${KEY_GUIDE[key] ?? key}.`,
         `Exchange rate: ${fx.cop_per_usd ?? 'n/a'} COP per USD. Report money in USD.`,
         `Results:\n${hits.map((h, i) => `[${i}] ${h.url}\n${h.title}\n${h.snippet}`).join('\n\n')}`,
       ].join('\n\n'),
       tool: {
-        name: 'value',
-        description: 'Report the extracted value',
+        name: 'values',
+        description: 'Every figure found for the value',
         schema: {
           type: 'object',
           properties: {
             found: { type: 'boolean' },
-            value: { type: 'number' },
-            low: { type: 'number' },
-            high: { type: 'number' },
             unit: { type: 'string' },
-            source_index: { type: 'integer', description: 'The [n] of the result the value comes from' },
-            quote: { type: 'string', description: 'The exact words from that result that contain the figure, copied character for character' },
-            note: { type: 'string' },
-            confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
+            note: { type: 'string', description: 'How figures were converted and how they differ from what was asked' },
+            values: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  value: { type: 'number', description: 'Converted to the unit asked for' },
+                  source_index: { type: 'integer', description: 'The [n] of the result' },
+                  quote: { type: 'string', description: 'The exact words from that result that contain the original figure, copied character for character' },
+                },
+                required: ['value', 'source_index', 'quote'],
+              },
+            },
           },
-          required: ['found', 'value', 'low', 'high', 'unit', 'source_index', 'quote', 'note', 'confidence'],
+          required: ['found', 'unit', 'note', 'values'],
         },
       },
-      maxTokens: 800,
+      maxTokens: 2000,
     });
-    const source = hits[out.source_index];
-    if (!out.found || !source || !(out.value > 0)) {
-      skipped.push({ key, reason: !out.found ? 'not found in results' : !source ? 'bad source index' : 'non-positive value', note: out.note });
-      misses[key] = { count: (misses[key]?.count ?? 0) + 1, last: new Date().toISOString() };
+
+    // Confirm each quote against the result text, then the page itself (a few pages at most).
+    const observations: Observation[] = [];
+    let fetched = 0;
+    for (const v of out.found ? out.values : []) {
+      const source = hits[v.source_index];
+      if (!source) continue;
+      const quote = squash(v.quote ?? '');
+      let confirmed = quote.length >= 4 && squash(`${source.title} ${source.snippet}`).includes(quote);
+      if (!confirmed && quote.length >= 4 && fetched < 4) {
+        fetched++;
+        confirmed = squash(await fetchText(source.url, 60000)).includes(quote);
+      }
+      observations.push({ value: v.value, url: source.url, confirmed });
+    }
+    const c = consensus(observations);
+    if (!c) {
+      skipped.push({ key, reason: 'no usable figures', note: out.note });
+      misses[key] = { count: attempt + 1, last: new Date().toISOString() };
       continue;
     }
-    // Confirm the quoted figure is really on the page (or in the result text).
-    const squash = (t: string) => t.toLowerCase().replace(/\s+/g, ' ').trim();
-    const quote = squash(out.quote ?? '');
-    let confirmed = quote.length >= 6 && squash(`${source.title} ${source.snippet}`).includes(quote);
-    if (!confirmed && quote.length >= 6) confirmed = squash(await fetchText(source.url, 60000)).includes(quote);
-    if (!confirmed) out.confidence = 'low';
     delete misses[key];
+    // The cited source is the kept observation closest to the median.
+    const best = [...c.kept].sort((a, b) => Math.abs(a.value - c.value) - Math.abs(b.value - c.value))[0];
     const row: NewAssumption = {
       subject_type: 'location',
       subject_id: location.id,
       key,
-      value_num: out.value,
-      low: Math.min(out.low, out.value),
-      high: Math.max(out.high, out.value),
+      value_num: Math.round(c.value * 1000) / 1000,
+      low: Math.round(c.low * 1000) / 1000,
+      high: Math.round(c.high * 1000) / 1000,
       unit: out.unit,
       currency: key.endsWith('_usd') ? 'USD' : null,
-      source_url: source.url,
-      source_note: `${out.note}${confirmed ? ` Quote: "${out.quote}"` : ' (figure not confirmed on the page)'}`,
-      confidence: out.confidence,
-      stale_after: key.startsWith('lease') || key.startsWith('land') ? '120 days' : '365 days',
+      source_url: best.url,
+      source_note: `Median of ${c.kept.length} figure(s) from ${c.sources} site(s)${c.dropped.length ? `, ${c.dropped.length} outlier(s) dropped` : ''}. ${out.note} Sources: ${[...new Set(c.kept.map((o) => o.url))].slice(0, 6).join(' ')}`.slice(0, 2000),
+      confidence: c.confidence,
+      stale_after: key.startsWith('lease') || key.startsWith('land') ? '90 days' : key.startsWith('demand.population') ? '1095 days' : '365 days',
     };
     written.push(...(await writeAssumptions(run, 'location-scout', [row])));
   }
@@ -134,4 +166,46 @@ function queryFor(key: string, l: LocationRow): string {
     default:
       return `${KEY_GUIDE[key] ?? key} ${place}`;
   }
+}
+
+/**
+ * Search strategy by attempt: listing and local-language searches first, then
+ * official statistics and the big listing portals, then the wider region.
+ * After three failed strategies the scout rests for a month and starts again.
+ */
+export function strategy(key: string, l: LocationRow, country: string | undefined, attempt: number): string[] {
+  const guide = KEY_GUIDE[key] ?? key;
+  const region = `${l.name}${country ? ` ${country}` : ''}`;
+  switch (attempt % 3) {
+    case 0:
+      return [queryFor(key, l), `${guide} ${l.name}`];
+    case 1:
+      return [officialQuery(key, l, country), portalQuery(key, l)];
+    default:
+      return [`${guide} ${country ?? region}`, `${guide} near ${region} average`];
+  }
+}
+
+function officialQuery(key: string, l: LocationRow, country?: string): string {
+  const cc = l.country_code;
+  const place = l.name;
+  switch (key) {
+    case 'demand.population_40min':
+      return cc === 'US' ? `${place} county population census estimate` : cc === 'CO' ? `población ${place} DANE proyección` : `population ${place} ${country ?? ''} census`;
+    case 'labor.monthly_wage_usd':
+      return cc === 'US' ? `BLS hotel desk clerk hourly wage ${place}` : cc === 'CO' ? 'salario mínimo 2026 Colombia decreto auxilio de transporte' : `minimum wage 2026 ${country ?? place}`;
+    case 'tax.income_effective_pct':
+      return cc === 'US' ? 'IRS self-employment tax rate 2026' : cc === 'CO' ? 'DIAN régimen simple de tributación tarifas 2026' : `small business income tax rate ${country ?? place} 2026`;
+    case 'tax.revenue_pct':
+      return cc === 'CO' ? 'DIAN régimen simple tarifas actividades hoteleras' : `lodging occupancy tax rate ${place}`;
+    default:
+      return `${KEY_GUIDE[key] ?? key} ${place} statistics`;
+  }
+}
+
+function portalQuery(key: string, l: LocationRow): string {
+  const portal = l.country_code === 'US' ? 'land.com OR zillow' : l.country_code === 'CO' ? 'fincaraiz OR metrocuadrado' : 'encuentra24';
+  if (key.startsWith('land')) return `${portal} land for sale ${l.name}`;
+  if (key.startsWith('lease')) return `${portal} rent ${l.name} ${key.includes('commercial') ? 'commercial' : key.includes('estate') ? 'farm estate' : 'house'}`;
+  return `${KEY_GUIDE[key] ?? key} ${l.name}`;
 }

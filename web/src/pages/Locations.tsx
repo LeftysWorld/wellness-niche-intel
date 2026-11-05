@@ -26,7 +26,6 @@ const FACTS: [string, string, (v: number) => string][] = [
   ['labor.monthly_wage_usd', 'Worker', (v) => `${usd(v)}/mo`],
   ['demand.population_40min', 'People within 40 min', (v) => Math.round(v).toLocaleString()],
 ];
-const COUNTRY_KEYS = new Set(['labor.monthly_wage_usd']);
 
 interface Fact {
   subject_id: string;
@@ -36,51 +35,25 @@ interface Fact {
   source_url: string | null;
 }
 
-/** One value with where it came from; guessed or missing values can be filled in by the owner. */
-function FactCell({ place, label, fmt, fact, missed, onSaved, subjectId, keyName }: { place: Place; label: string; fmt: (v: number) => string; fact?: Fact; missed: boolean; onSaved: () => void; subjectId: string; keyName: string }) {
-  const [editing, setEditing] = useState(false);
-  const [val, setVal] = useState('');
-  const guessed = fact && fact.written_by !== 'user' && (fact.written_by.includes('estimate') || !fact.source_url);
-  const save = async (key: string) => {
-    const n = Number(val);
-    if (!Number.isFinite(n) || n <= 0) return;
-    await supabase.from('assumptions').insert({ subject_type: 'location', subject_id: subjectId, key, value_num: n, source_note: `Entered by owner for ${place.name}`, confidence: 'high', written_by: 'user' });
-    setEditing(false);
-    onSaved();
-  };
+/** One value with where it came from. Guessed or missing values are found by the scout automatically. */
+function FactCell({ label, fmt, fact, searching }: { label: string; fmt: (v: number) => string; fact?: Fact; searching: boolean }) {
+  const guessed = fact && (fact.written_by.includes('estimate') || !fact.source_url);
   return (
     <span>
-      {label}:{' '}
-      {editing ? (
-        <span className="fill">
-          <input autoFocus value={val} onChange={(e) => setVal(e.target.value)} placeholder="USD" />
-          <button onClick={() => save(keyName)}>Save</button>
-        </span>
-      ) : (
+      {label}: <b>{fact?.value_num != null ? fmt(Number(fact.value_num)) : '—'}</b>
+      {fact?.source_url && !guessed && (
         <>
-          <b>{fact?.value_num != null ? fmt(Number(fact.value_num)) : '—'}</b>
-          {fact?.source_url && !guessed && (
-            <>
-              {' '}
-              <a href={fact.source_url} target="_blank" rel="noreferrer" title="Source">
-                ↗
-              </a>
-            </>
-          )}
-          {guessed && <small className="muted" title="Estimate, not sourced yet"> est.</small>}
-          {missed && <small className="err" title="The scout couldn't find this twice; enter it if you know it"> not found</small>}
-          {(guessed || !fact || missed) && (
-            <button className="link small" onClick={() => setEditing(true)}>
-              {' '}
-              enter
-            </button>
-          )}
+          {' '}
+          <a href={fact.source_url} target="_blank" rel="noreferrer" title="Source">
+            ↗
+          </a>
         </>
       )}
+      {guessed && <small className="muted" title="Starting estimate; the scout replaces it with sourced figures"> est.</small>}
+      {(searching || !fact || guessed) && <small className="muted" title="The scout keeps searching automatically, trying a different strategy each time"> · searching</small>}
     </span>
   );
 }
-
 
 function Wishes() {
   const profile = useLoad(async () => {
@@ -218,7 +191,7 @@ export function Locations() {
   const byId = new Map(data.places.map((p) => [p.id, p]));
   const fact = (p: Place, key: string): Fact | undefined =>
     (data.facts.find((f) => f.subject_id === p.id && f.key === key) ?? data.facts.find((f) => f.subject_id === p.parent_id && f.key === key)) as Fact | undefined;
-  const missedKeys = (p: Place): string[] => Object.entries((p.profile?.scout_misses ?? {}) as Record<string, { count?: number }>).filter(([, m]) => (m?.count ?? 0) >= 2).map(([k]) => k);
+  const missedKeys = (p: Place): string[] => Object.keys((p.profile?.scout_misses ?? {}) as Record<string, unknown>);
   const mine = data.places
     .filter((p) => p.level === 'micro_area' && p.active && (!favOnly || p.favorite))
     .sort((a, b) => Number(b.favorite) - Number(a.favorite) || (b.fit?.score ?? -1) - (a.fit?.score ?? -1));
@@ -264,17 +237,7 @@ export function Locations() {
               {(p.fit?.cons?.length ?? 0) > 0 && <p className="small err">− {p.fit.cons!.join(' · ')}</p>}
               <div className="facts small">
                 {FACTS.map(([key, label, fmt]) => (
-                  <FactCell
-                    key={key}
-                    keyName={key}
-                    place={p}
-                    label={label}
-                    fmt={fmt}
-                    fact={fact(p, key)}
-                    missed={missedKeys(p).includes(key)}
-                    subjectId={COUNTRY_KEYS.has(key) && p.parent_id ? p.parent_id : p.id}
-                    onSaved={reload}
-                  />
+                  <FactCell key={key} label={label} fmt={fmt} fact={fact(p, key)} searching={missedKeys(p).includes(key)} />
                 ))}
               </div>
               {p.notes && <p className="small muted">{p.notes}</p>}

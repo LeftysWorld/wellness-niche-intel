@@ -8,7 +8,8 @@ import { analyzePairing } from '../_shared/analysis.ts';
 import { db, getSetting, must, type Budgets } from '../_shared/db.ts';
 import { HttpError } from '../_shared/http.ts';
 import { withRun } from '../_shared/runs.ts';
-import { scoutLocation } from '../_shared/scout.ts';
+import { COUNTRY_KEYS, scoutLocation } from '../_shared/scout.ts';
+import { REQUIRED_LOCATION_KEYS } from '../_shared/ledger.ts';
 import { run as fitScreen } from '../fit-screen/handler.ts';
 
 async function processChangeEvents() {
@@ -103,15 +104,20 @@ export async function run(body: Record<string, unknown>) {
 
   if (task === 'refresh') {
     const limit = Number(body.limit ?? 2);
-    // Stalest first: locations whose newest value is oldest (or that have none).
-    const locs = must(await db().from('locations').select('id,slug').eq('active', true), 'locations');
+    // Most-guessed first (estimates plus missing required values), then stalest:
+    // the refresh keeps replacing guesses with sourced values automatically.
+    const locs = must(await db().from('locations').select('id,slug,level').eq('active', true), 'locations');
     const ages = await Promise.all(
-      locs.map(async (l) => {
-        const r = must(await db().from('current_assumptions').select('retrieved_at').eq('subject_type', 'location').eq('subject_id', l.id).order('retrieved_at', { ascending: false }).limit(1).maybeSingle(), 'age');
-        return { ...l, newest: r?.retrieved_at ? Date.parse(r.retrieved_at) : 0 };
+      locs.map(async (l: { id: string; slug: string; level: string }) => {
+        const rows = must(await db().from('current_assumptions').select('key,written_by,source_url,retrieved_at').eq('subject_type', 'location').eq('subject_id', l.id), 'values');
+        const guessed = rows.filter((r: { written_by: string; source_url: string | null }) => r.written_by.includes('estimate') || !r.source_url).length;
+        const own = REQUIRED_LOCATION_KEYS.filter((k) => (l.level === 'country' ? COUNTRY_KEYS.has(k) : !COUNTRY_KEYS.has(k)));
+        const missing = own.filter((k) => !rows.some((r: { key: string }) => r.key === k)).length;
+        const newest = rows.reduce((m: number, r: { retrieved_at: string }) => Math.max(m, Date.parse(r.retrieved_at ?? '') || 0), 0);
+        return { ...l, gaps: guessed + missing, newest };
       }),
     );
-    const pick = ages.sort((a, b) => a.newest - b.newest).slice(0, limit);
+    const pick = ages.sort((a, b) => b.gaps - a.gaps || a.newest - b.newest).slice(0, limit);
     return withRun('monthly_refresh', { tokenBudget: budgets.location_scout_tokens, searchBudget: 20 * limit, input: body, exclusive: true }, async (run) => {
       const out: unknown[] = [];
       for (const l of pick) out.push(await scoutLocation(run, l.id));
