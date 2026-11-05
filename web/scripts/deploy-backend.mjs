@@ -48,8 +48,8 @@ if (env.SUPABASE_DB_PASSWORD) {
   console.log('[backend] SUPABASE_DB_PASSWORD is not set; skipping migrations.');
 }
 // Record which commit the backend runs, so the app can warn if it falls behind.
-run(`${cli} secrets set BACKEND_VERSION=${sha} --project-ref ${PROJECT_REF}`);
-run(`${cli} functions deploy api --project-ref ${PROJECT_REF} --no-verify-jwt --use-api`);
+run(`${cli} secrets set BACKEND_VERSION=${sha} --project-ref ${PROJECT_REF} --yes`);
+run(`${cli} functions deploy api --project-ref ${PROJECT_REF} --no-verify-jwt --use-api --yes`);
 
 // Smoke test: the backend must answer, and must refuse a call with no credentials.
 const res = await fetch(`https://${PROJECT_REF}.supabase.co/functions/v1/api/fit-screen`, { method: 'POST' });
