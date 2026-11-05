@@ -71,9 +71,13 @@ export interface FitScores {
   risk: number;
   visa: number;
   data: number;
+  /** How well the place matches the owner's own description (AI judgement, 0-10). */
+  place: number;
 }
 
-const WEIGHTS: Record<keyof FitScores, number> = { target: 0.3, capital: 0.15, workload: 0.1, demand: 0.15, risk: 0.1, visa: 0.1, data: 0.1 };
+const WEIGHTS: Record<keyof FitScores, number> = { target: 0.25, capital: 0.15, workload: 0.1, demand: 0.1, risk: 0.05, visa: 0.1, data: 0.05, place: 0.2 };
+/** Added to the total for places the owner starred. */
+const FAVORITE_BONUS = 0.5;
 
 export function score(
   c: Candidate,
@@ -95,7 +99,8 @@ export function score(
     risk: clamp(10 - ledgerRisk.countryDiscount * 10 - Math.max(0, ledgerRisk.advisory - 1) * 2),
     visa: visaMap[params.visa?.[location.country_code] ?? 'unclear'] ?? 3,
     data: clamp(10 - c.build.missing.length * 2 - c.build.weakInputs.length * 0.5),
+    place: clamp(Number(location.fit?.score ?? 5)),
   };
-  const total = (Object.keys(WEIGHTS) as (keyof FitScores)[]).reduce((s, k) => s + scores[k] * WEIGHTS[k], 0);
+  const total = (Object.keys(WEIGHTS) as (keyof FitScores)[]).reduce((s, k) => s + scores[k] * WEIGHTS[k], 0) + (location.favorite ? FAVORITE_BONUS : 0);
   return { scores, total: Math.round(total * 100) / 100 };
 }

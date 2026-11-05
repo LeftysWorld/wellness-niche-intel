@@ -1,0 +1,263 @@
+import { useEffect, useState, type FormEvent } from 'react';
+import { callAgent, supabase, usd } from '../supabase.ts';
+import { Err, Loading, RunButton, Section, useLoad } from '../ui.tsx';
+
+interface Place {
+  id: string;
+  slug: string;
+  name: string;
+  country_code: string;
+  level: string;
+  parent_id: string | null;
+  active: boolean;
+  favorite: boolean;
+  origin: string;
+  notes: string | null;
+  fit: { score?: number; summary?: string; pros?: string[]; cons?: string[]; unknowns?: string[]; dismissed?: boolean };
+}
+
+const FACTS: [string, string, (v: number) => string][] = [
+  ['lease.finca_monthly_usd', 'Lease', (v) => `${usd(v)}/mo`],
+  ['land.price_per_acre_usd', 'Land', (v) => `${usd(v)}/acre`],
+  ['labor.monthly_wage_usd', 'Worker', (v) => `${usd(v)}/mo`],
+  ['demand.population_40min', 'People within 40 min', (v) => Math.round(v).toLocaleString()],
+];
+
+function Wishes() {
+  const profile = useLoad(async () => {
+    const { data, error } = await supabase.from('parameter_profiles').select('id,params').eq('is_default', true).single();
+    if (error) throw error;
+    return data;
+  });
+  const [text, setText] = useState('');
+  const [state, setState] = useState<string | null>(null);
+  useEffect(() => {
+    if (profile.data) setText(String(profile.data.params?.location_wishes ?? ''));
+  }, [profile.data]);
+
+  async function save() {
+    if (!profile.data) return;
+    setState('Saving…');
+    const params = { ...profile.data.params, location_wishes: text };
+    const { error } = await supabase.from('parameter_profiles').update({ params }).eq('id', profile.data.id);
+    if (error) return setState(error.message);
+    setState('Saved. Re-scoring your places against it…');
+    try {
+      await callAgent('location-fit');
+      setState('Saved and re-scored.');
+    } catch (e) {
+      setState(`Saved. Re-scoring failed: ${e instanceof Error ? e.message : e}`);
+    }
+  }
+
+  return (
+    <Section title="What I'm looking for in a place">
+      <p className="muted small">In your own words: climate, landscape, how remote, distance to an airport or city, community, cost, safety, language, anything that matters.</p>
+      <textarea
+        rows={6}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        placeholder="e.g. Cool mountain climate, green and quiet, under 1 hour from an international airport, a town nearby with good food, safe for my family, land with a view…"
+      />
+      <div className="actions">
+        <button onClick={save} disabled={!profile.data}>
+          Save and re-score places
+        </button>
+        {state && <small className="muted">{state}</small>}
+      </div>
+    </Section>
+  );
+}
+
+function AddPlace({ countries, onAdded }: { countries: Place[]; onAdded: () => void }) {
+  const [name, setName] = useState('');
+  const [country, setCountry] = useState('');
+  const [otherCode, setOtherCode] = useState('');
+  const [otherName, setOtherName] = useState('');
+  const [notes, setNotes] = useState('');
+  const [msg, setMsg] = useState<string | null>(null);
+
+  async function add(e: FormEvent) {
+    e.preventDefault();
+    setMsg('Adding…');
+    let parent = countries.find((c) => c.id === country);
+    if (country === 'other') {
+      const code = otherCode.trim().toUpperCase();
+      if (!/^[A-Z]{2}$/.test(code)) return setMsg('Use a 2-letter country code, e.g. PT, MX, EC');
+      const { data, error } = await supabase.from('locations').insert({ slug: code.toLowerCase(), name: otherName || code, country_code: code, level: 'country', active: true, origin: 'user' }).select('*').single();
+      if (error) return setMsg(error.message);
+      parent = data as Place;
+    }
+    if (!parent) return setMsg('Pick a country');
+    const slug = `${parent.country_code.toLowerCase()}-${name.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}`;
+    const { data: place, error } = await supabase
+      .from('locations')
+      .insert({ slug, name, country_code: parent.country_code, level: 'micro_area', parent_id: parent.id, active: true, favorite: true, origin: 'user', notes: notes || null })
+      .select('id')
+      .single();
+    if (error) return setMsg(error.message.includes('duplicate') ? 'That place is already on your list' : error.message);
+    setName('');
+    setNotes('');
+    setMsg('Added. Looking up local costs and scoring it (about a minute)…');
+    onAdded();
+    try {
+      await callAgent('location-fit', { location_id: place.id });
+      onAdded();
+      await callAgent('location-scout', { location_id: place.id });
+      setMsg('Added, scored and researched.');
+    } catch (err) {
+      setMsg(`Added. Research will finish on the next daily run (${err instanceof Error ? err.message : err}).`);
+    }
+    onAdded();
+  }
+
+  return (
+    <Section title="Add a place">
+      <form className="add-place" onSubmit={add}>
+        <input required placeholder="Town or area, e.g. Jardín" value={name} onChange={(e) => setName(e.target.value)} />
+        <select required value={country} onChange={(e) => setCountry(e.target.value)}>
+          <option value="">Country…</option>
+          {countries.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.name}
+            </option>
+          ))}
+          <option value="other">Other…</option>
+        </select>
+        {country === 'other' && (
+          <>
+            <input placeholder="Code (PT)" size={4} value={otherCode} onChange={(e) => setOtherCode(e.target.value)} />
+            <input placeholder="Country name" value={otherName} onChange={(e) => setOtherName(e.target.value)} />
+          </>
+        )}
+        <input className="grow" placeholder="Why you like it (optional)" value={notes} onChange={(e) => setNotes(e.target.value)} />
+        <button type="submit">Add place</button>
+      </form>
+      {msg && <p className="small muted">{msg}</p>}
+    </Section>
+  );
+}
+
+export function Locations() {
+  const [favOnly, setFavOnly] = useState(false);
+  const { data, error, reload } = useLoad(async () => {
+    const { data: places, error } = await supabase.from('locations').select('*').order('name');
+    if (error) throw error;
+    const ids = (places ?? []).map((p) => p.id);
+    const { data: facts } = await supabase
+      .from('current_assumptions')
+      .select('subject_id,key,value_num')
+      .eq('subject_type', 'location')
+      .in('subject_id', ids)
+      .in('key', FACTS.map((f) => f[0]));
+    return { places: (places ?? []) as Place[], facts: facts ?? [] };
+  });
+
+  if (error) return <Err error={error} />;
+  if (!data) return <Loading />;
+  const countries = data.places.filter((p) => p.level === 'country');
+  const byId = new Map(data.places.map((p) => [p.id, p]));
+  const fact = (p: Place, key: string) =>
+    data.facts.find((f) => f.subject_id === p.id && f.key === key)?.value_num ?? data.facts.find((f) => f.subject_id === p.parent_id && f.key === key)?.value_num;
+  const mine = data.places
+    .filter((p) => p.level === 'micro_area' && p.active && (!favOnly || p.favorite))
+    .sort((a, b) => Number(b.favorite) - Number(a.favorite) || (b.fit?.score ?? -1) - (a.fit?.score ?? -1));
+  const suggested = data.places.filter((p) => p.level === 'micro_area' && !p.active && p.origin === 'ai_suggested' && !p.fit?.dismissed);
+
+  const update = async (id: string, patch: Partial<Place>) => {
+    await supabase.from('locations').update(patch).eq('id', id);
+    reload();
+  };
+
+  return (
+    <>
+      <Wishes />
+      <AddPlace countries={countries} onAdded={reload} />
+      <Section
+        title="My places"
+        actions={
+          <>
+            <label className="small">
+              <input type="checkbox" checked={favOnly} onChange={(e) => setFavOnly(e.target.checked)} /> Starred only
+            </label>
+            <RunButton label="Re-score all" action={() => callAgent('location-fit')} onDone={reload} />
+          </>
+        }
+      >
+        <div className="cards">
+          {mine.map((p) => (
+            <article key={p.id} className="idea">
+              <header>
+                <h3>
+                  <button className="star" title={p.favorite ? 'Unstar' : 'Star'} onClick={() => update(p.id, { favorite: !p.favorite })}>
+                    {p.favorite ? '★' : '☆'}
+                  </button>{' '}
+                  {p.name}
+                  <small className="muted"> · {byId.get(p.parent_id ?? '')?.name ?? p.country_code}</small>
+                </h3>
+                <span className="score" title="Match to your description, 0–10">
+                  {p.fit?.score ?? '—'}
+                </span>
+              </header>
+              {p.fit?.summary ? <p className="small">{p.fit.summary}</p> : <p className="small muted">Not scored yet — save a description above.</p>}
+              {(p.fit?.pros?.length ?? 0) > 0 && <p className="small ok">+ {p.fit.pros!.join(' · ')}</p>}
+              {(p.fit?.cons?.length ?? 0) > 0 && <p className="small err">− {p.fit.cons!.join(' · ')}</p>}
+              <div className="facts small">
+                {FACTS.map(([key, label, fmt]) => {
+                  const v = fact(p, key);
+                  return (
+                    <span key={key}>
+                      {label}: <b>{v === undefined || v === null ? '—' : fmt(Number(v))}</b>
+                    </span>
+                  );
+                })}
+              </div>
+              {p.notes && <p className="small muted">{p.notes}</p>}
+              <footer>
+                <RunButton label="Update local data" action={() => callAgent('location-scout', { location_id: p.id })} onDone={reload} />
+                <button className="link muted" onClick={() => update(p.id, { active: false, favorite: false })}>
+                  Remove
+                </button>
+              </footer>
+            </article>
+          ))}
+        </div>
+      </Section>
+      <Section title="Suggested places" actions={<RunButton label="Suggest new places" action={() => callAgent('location-ideas', { count: 5 })} onDone={reload} />}>
+        <p className="muted small">The AI looks for towns that match your description. Add the ones you like; they'll be researched and paired with your niches.</p>
+        {suggested.length === 0 ? (
+          <p className="muted small">None right now.</p>
+        ) : (
+          <div className="cards">
+            {suggested.map((p) => (
+              <article key={p.id} className="idea">
+                <header>
+                  <h3>
+                    {p.name} <small className="muted">· {byId.get(p.parent_id ?? '')?.name ?? p.country_code}</small>
+                  </h3>
+                  <span className="score">{p.fit?.score ?? '—'}</span>
+                </header>
+                <p className="small" style={{ whiteSpace: 'pre-line' }}>
+                  {p.notes}
+                </p>
+                <footer>
+                  <button
+                    onClick={async () => {
+                      await update(p.id, { active: true });
+                      callAgent('location-scout', { location_id: p.id }).then(reload, reload);
+                    }}
+                  >
+                    Add to my places
+                  </button>
+                  <button className="link muted" onClick={() => update(p.id, { fit: { ...p.fit, dismissed: true } })}>
+                    Dismiss
+                  </button>
+                </footer>
+              </article>
+            ))}
+          </div>
+        )}
+      </Section>
+    </>
+  );
+}

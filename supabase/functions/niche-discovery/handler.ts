@@ -4,7 +4,7 @@
 //     them through the engine, and put the niche in front of the owner.
 //   mode=brainstorm: search broadly for land-based wellness concepts and add
 //     any not already in the library as proposed niches.
-import { db, getSetting, must, type Budgets, type Models, type Thresholds } from '../_shared/db.ts';
+import { db, getSetting, must, type Budgets, type Models } from '../_shared/db.ts';
 import { ask, clip } from '../_shared/llm.ts';
 import { buildModel, mergeLedger, type CostTemplate, type NicheModelSpec } from '../_shared/model-builder.ts';
 import { analyze } from '../_shared/engine/index.ts';
@@ -16,7 +16,18 @@ const tri = { type: 'object', properties: { low: { type: 'number' }, mode: { typ
 const CARD_SCHEMA = {
   type: 'object' as const,
   properties: {
-    summary: { type: 'string' },
+    summary: { type: 'string', description: 'Two or three plain sentences: what the guest gets and how the business makes money' },
+    why_interesting: { type: 'string', description: 'Why this could work now: demand, trend, gap in supply' },
+    unique_angle: { type: 'string', description: 'What makes it different from an ordinary retreat or spa' },
+    operating_examples: {
+      type: 'array',
+      description: 'Real businesses of this kind found in the search results',
+      items: {
+        type: 'object',
+        properties: { name: { type: 'string' }, locality: { type: 'string' }, country: { type: 'string' }, source_index: { type: 'integer' }, note: { type: 'string' } },
+        required: ['name', 'locality', 'country', 'source_index', 'note'],
+      },
+    },
     structures: { type: 'string' },
     revenue_units: { type: 'string' },
     price_model: { type: 'string' },
@@ -102,7 +113,7 @@ const CARD_SCHEMA = {
     },
     sources: { type: 'array', items: { type: 'string' } },
   },
-  required: ['summary', 'structures', 'revenue_units', 'price_model', 'staffing', 'competitor_terms', 'risk_tags', 'model', 'template', 'sources'],
+  required: ['summary', 'why_interesting', 'unique_angle', 'operating_examples', 'structures', 'revenue_units', 'price_model', 'staffing', 'competitor_terms', 'risk_tags', 'model', 'template', 'sources'],
 };
 
 /** Run the drafted card through the engine with a neutral US ledger to catch broken drafts. */
@@ -135,29 +146,42 @@ function smokeTest(model: NicheModelSpec, template: CostTemplate): string[] {
 async function draftNiche(run: Run, models: Models, nicheId: string) {
   const niche = must(await db().from('niches').select('*').eq('id', nicheId).single(), 'niche');
   const examples = must(await db().from('example_businesses').select('name,locality,country,url,description,prices').eq('niche_id', nicheId).limit(8), 'examples');
+  const seen = new Set<string>();
   const hits = [
+    ...(await search(run, `${niche.name} retreat business`, 8)),
     ...(await search(run, `${niche.name} prices per night packages`, 6)),
     ...(await search(run, `how much does it cost to build ${niche.name} startup cost`, 6)),
-  ];
+  ].filter((h) => !seen.has(h.url) && seen.add(h.url));
   const reference = must(await db().from('niches').select('card').eq('slug', 'dark-retreat').maybeSingle(), 'reference card');
-  const draft = await ask<Record<string, unknown> & { model: NicheModelSpec; template: CostTemplate; risk_tags: string[] }>({
+  const draft = await ask<Record<string, unknown> & { model: NicheModelSpec; template: CostTemplate; risk_tags: string[]; unique_angle?: string; operating_examples?: { name: string; locality: string; country: string; source_index: number; note: string }[] }>({
     run,
     model: models.judgment,
     system:
       'You design unit economics for small wellness businesses tied to land or a structure, for a solo owner-operator with $100-150k. Use only evidence in the material given plus conservative industry norms; prefer wide ranges to false precision. All money in USD at a rural western North Carolina baseline.',
     prompt: [
-      `Niche: ${niche.name}${niche.card?.description ? ` — ${niche.card.description}` : ''}`,
+      `Niche: ${niche.name}${niche.card?.description ? ` — ${niche.card.description}` : ''}${niche.card?.note ? ` — ${niche.card.note}` : ''}`,
       `Known operating examples:\n${examples.map((e) => `- ${e.name} (${e.locality}, ${e.country}) ${e.url}: ${clip(e.description ?? '', 300)} prices=${JSON.stringify(e.prices)}`).join('\n') || '(none)'}`,
-      `Search results:\n${hits.map((h) => `- ${h.url}\n  ${h.title}: ${clip(h.snippet, 400)}`).join('\n')}`,
+      `Search results:\n${hits.map((h, i) => `[${i}] ${h.url}\n  ${h.title}: ${clip(h.snippet, 400)}`).join('\n')}`,
       `Reference card for a different niche, to show the expected shape and scale:\n${clip(JSON.stringify(reference?.card?.model ?? {}), 3500)}`,
-      'Draft the card. Streams with one unit and one sale a month are flat monthly revenue lines. Template items: build-scaled for construction, equipment-scaled for kit; include a lease deposit item (leaseMonths) and items marked own/lease where they differ. List the URLs you relied on in sources.',
+      'Draft the card. List real operating businesses you can see in the results under operating_examples (cite the [n]). Streams with one unit and one sale a month are flat monthly revenue lines. Template items: build-scaled for construction, equipment-scaled for kit; include a lease deposit item (leaseMonths) and items marked own/lease where they differ. List the URLs you relied on in sources.',
     ].join('\n\n'),
     tool: { name: 'niche_card', description: 'The drafted niche card', schema: CARD_SCHEMA },
     maxTokens: 6000,
   });
 
   const problems = smokeTest(draft.model, draft.template);
-  const { model, template, risk_tags, ...rest } = draft;
+  const { model, template, risk_tags, operating_examples, ...rest } = draft;
+  let examplesAdded = 0;
+  for (const ex of operating_examples ?? []) {
+    const src = hits[ex.source_index];
+    if (!src || !ex.name) continue;
+    const fp = must(await db().rpc('business_fingerprint', { name: ex.name, locality: ex.locality, country: ex.country }), 'fingerprint') as string;
+    const [dupe] = must(await db().rpc('match_examples', { q: fp, min_similarity: 0.6, max_rows: 1 }), 'match');
+    if (dupe) continue;
+    const { error } = await db().from('example_businesses').insert({ niche_id: nicheId, name: ex.name, locality: ex.locality, country: ex.country, url: src.url, description: ex.note, fingerprint: fp, status: 'operating' });
+    if (!error) examplesAdded++;
+  }
+  if (examplesAdded) await db().rpc('refresh_niche_signals');
   const card = { ...(niche.card ?? {}), ...rest, model: { ...model, basis: 'AI draft from examples and search results; review before approving.' }, drafted_by_run: run.id, smoke_test: problems };
   await db().from('niches').update({ card, risk_tags: risk_tags ?? [] }).eq('id', nicheId);
   if (!problems.length) {
@@ -169,44 +193,45 @@ async function draftNiche(run: Run, models: Models, nicheId: string) {
     item_id: nicheId,
     summary: problems.length
       ? `${niche.name}: draft card failed checks (${problems.join('; ')}). Needs more research.`
-      : `${niche.name}: card and cost template drafted from ${examples.length} examples. Approve to include it in fit screens.`,
+      : `${niche.name}: ${rest.unique_angle ?? 'drafted'} (${examples.length + examplesAdded} operating examples). Approve to pair it with your places.`,
     payload: { risk_tags, streams: model.streams?.map((s) => s.label), sources: rest.sources },
   });
-  return { niche: niche.slug, ok: problems.length === 0, problems };
+  return { niche: niche.slug, ok: problems.length === 0, problems, examplesAdded };
 }
 
 async function brainstorm(run: Run, models: Models) {
   const queries = [
     'unusual wellness retreat concepts rural property',
     'new types of wellness tourism on farmland',
-    'land-based wellness business ideas small acreage',
+    'unique sauna bathhouse concept opens countryside',
     'experiential wellness lodging trend 2026',
+    'niche retreat concept nobody else offers',
+    'nuevo concepto de bienestar en finca',
   ];
   const hits = (await Promise.all(queries.map((q) => search(run, q, 8)))).flat();
   const known = must(await db().from('niches').select('slug,name'), 'niches');
-  const out = await ask<{ ideas: { name: string; description: string; example_url: string }[] }>({
+  const out = await ask<{ ideas: { name: string; description: string; source_index: number }[] }>({
     run,
     model: models.judgment,
-    system: 'You find distinct wellness business concepts that need land or a dedicated structure and that already operate somewhere. Skip anything in the known list, anything purely urban, and anything needing a medical licence.',
-    prompt: `Known niches: ${known.map((k) => k.name).join('; ')}\n\nSearch results:\n${hits.map((h) => `- ${h.url}\n  ${h.title}: ${clip(h.snippet, 300)}`).join('\n')}`,
+    system: 'You find distinct, unusual wellness business concepts that need land or a dedicated structure and that already operate somewhere. Favour specific, surprising formats over generic retreats. Skip anything in the known list, anything purely urban, and anything needing a medical licence or psychedelics.',
+    prompt: `Known niches: ${known.map((k) => k.name).join('; ')}\n\nSearch results:\n${hits.map((h, i) => `[${i}] ${h.url}\n  ${h.title}: ${clip(h.snippet, 300)}`).join('\n')}`,
     tool: {
       name: 'ideas',
       description: 'New niche ideas, each backed by a result URL',
       schema: {
         type: 'object',
-        properties: { ideas: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, description: { type: 'string' }, example_url: { type: 'string' } }, required: ['name', 'description', 'example_url'] } } },
+        properties: { ideas: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, description: { type: 'string' }, source_index: { type: 'integer' } }, required: ['name', 'description', 'source_index'] } } },
         required: ['ideas'],
       },
     },
     maxTokens: 2500,
   });
-  const urls = new Set(hits.map((h) => h.url));
   let added = 0;
-  for (const idea of out.ideas.filter((i) => urls.has(i.example_url))) {
+  for (const idea of out.ideas.filter((i) => hits[i.source_index])) {
     const [match] = must(await db().rpc('match_niches', { q: idea.name, min_similarity: 0.35, max_rows: 1 }), 'match');
     if (match) continue;
     const slug = idea.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 60);
-    const { error } = await db().from('niches').insert({ slug, name: idea.name, family: 'brainstorm', status: 'proposed', card: { description: idea.description, discovered_from: idea.example_url } });
+    const { error } = await db().from('niches').insert({ slug, name: idea.name, family: 'brainstorm', status: 'proposed', card: { description: idea.description, discovered_from: hits[idea.source_index].url } });
     if (!error) added++;
   }
   return { ideas: out.ideas.length, added };
@@ -215,17 +240,20 @@ async function brainstorm(run: Run, models: Models) {
 export async function run(body: Record<string, unknown>) {
   const budgets = await getSetting<Budgets>('budgets');
   const models = await getSetting<Models>('models');
-  const th = await getSetting<Thresholds>('thresholds');
-  return withRun('niche_discovery', { tokenBudget: budgets.niche_discovery_tokens, searchBudget: 30, subjectId: body.niche_id as string | undefined, input: body }, async (run) => {
+  return withRun('niche_discovery', { tokenBudget: budgets.niche_discovery_tokens, searchBudget: 40, subjectId: body.niche_id as string | undefined, input: body }, async (run) => {
     if (body.mode === 'brainstorm') return await brainstorm(run, models);
     let ids: string[];
     if (body.niche_id) ids = [String(body.niche_id)];
     else {
-      // Proposed niches without a model card, with enough real examples, strongest signal first.
-      const rows = must(await db().from('niches').select('id,card,signal_score,example_businesses(count)').eq('status', 'proposed').order('signal_score', { ascending: false }).limit(20), 'proposed');
+      // Proposed niches not yet written up: starred first, then strongest signal.
+      // The write-up searches for operating examples itself.
+      const rows = must(
+        await db().from('niches').select('id,card,signal_score,favorite').eq('status', 'proposed').order('favorite', { ascending: false }).order('signal_score', { ascending: false }).limit(40),
+        'proposed',
+      );
       ids = rows
         // deno-lint-ignore no-explicit-any
-        .filter((r: any) => !r.card?.model && (r.example_businesses?.[0]?.count ?? 0) >= th.min_examples_for_niche)
+        .filter((r: any) => !r.card?.model && !r.card?.smoke_test)
         .slice(0, Number(body.limit ?? 3))
         .map((r) => r.id);
     }

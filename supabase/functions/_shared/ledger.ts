@@ -20,6 +20,10 @@ export interface LocationRow {
   level: 'country' | 'micro_area';
   parent_id: string | null;
   profile: Record<string, unknown>;
+  favorite?: boolean;
+  notes?: string | null;
+  origin?: string;
+  fit?: { score?: number; summary?: string; pros?: string[]; cons?: string[] } | null;
 }
 
 /** Ledger for a micro-area (with its country and global values), optionally a pairing on top. */

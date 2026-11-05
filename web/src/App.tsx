@@ -1,21 +1,25 @@
 import { useEffect, useState } from 'react';
 import type { Session } from '@supabase/supabase-js';
 import { OWNER_EMAIL, supabase } from './supabase.ts';
-import { Rankings } from './pages/Rankings.tsx';
+import { Ideas } from './pages/Ideas.tsx';
+import { Niches } from './pages/Niches.tsx';
+import { Locations } from './pages/Locations.tsx';
 import { PairingPage } from './pages/Pairing.tsx';
 import { Review } from './pages/Review.tsx';
 import { Runs } from './pages/Runs.tsx';
 
 const NAV = [
-  ['results', 'Results'],
+  ['ideas', 'Business ideas'],
+  ['niches', 'Niches'],
+  ['locations', 'Locations'],
   ['review', 'To review'],
   ['activity', 'Activity'],
 ] as const;
 
 function useHash() {
-  const [hash, setHash] = useState(location.hash.slice(1) || 'results');
+  const [hash, setHash] = useState(location.hash.slice(1) || 'ideas');
   useEffect(() => {
-    const on = () => setHash(location.hash.slice(1) || 'results');
+    const on = () => setHash(location.hash.slice(1) || 'ideas');
     addEventListener('hashchange', on);
     return () => removeEventListener('hashchange', on);
   }, []);
@@ -78,7 +82,9 @@ export function App() {
       </nav>
       <main>
         {page === 'pairing' && id && <PairingPage id={id} />}
-        {page === 'results' && <Rankings />}
+        {page === 'ideas' && <Ideas />}
+        {page === 'niches' && <Niches />}
+        {page === 'locations' && <Locations />}
         {page === 'review' && <Review />}
         {page === 'activity' && <Runs />}
       </main>

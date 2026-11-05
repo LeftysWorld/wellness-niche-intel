@@ -18,7 +18,8 @@ export async function run(body: Record<string, unknown>) {
     let nq = db().from('niches').select('id,slug,name,status,risk_tags,signal_score,card').eq('status', 'approved');
     if (body.niche_id) nq = nq.eq('id', body.niche_id);
     const niches = must(await nq, 'niches') as NicheRow[];
-    let lq = db().from('locations').select('*').in('slug', params.regions ?? []).eq('active', true);
+    // Every active place: the seeded regions, places the owner added, and AI suggestions they accepted.
+    let lq = db().from('locations').select('*').eq('active', true).eq('level', 'micro_area');
     if (body.location_id) lq = lq.eq('id', body.location_id);
     const locations = must(await lq, 'locations') as LocationRow[];
     const excluded: string[] = params.excluded_niche_tags ?? [];

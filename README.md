@@ -13,6 +13,8 @@ dashboard ─────────────────────▶ edg
 discovery-loop   search → classify (Haiku) → de-dupe → example / new niche → review queue
 niche-discovery  draft a model card + cost template (Sonnet) → engine smoke test → review queue
 location-scout   fill missing/stale ledger values with sourced numbers (Haiku)
+location-fit     judge each place against your own description (Sonnet)
+location-ideas   suggest new places that match your description (Sonnet)
 fit-screen       every approved niche × your regions → hard filters → quick simulation → score → shortlist
 analyze-pairing  local price research → full 2,000-run simulation → store → verifier
 verifier         code checks + independent review of inputs and sources (Opus)
@@ -41,6 +43,7 @@ Every number the model uses (land price, lease, wages, taxes, prices, occupancy�
 | discovery, full sweep (4 pages) | Sundays 09:13–09:58 |
 | niche card drafts | Sundays 12:37 |
 | niche brainstorm | 1st of month 12:47 |
+| place scores vs your description | Mondays 10:47 |
 | fit screen | Mondays 11:17 |
 | digest | Mondays 13:33 |
 
@@ -64,7 +67,10 @@ Only addresses in `app_users` can read data or run agents. Anyone else who signs
 cd web && cp .env.example .env.local && npm install && npm run dev
 ```
 
-**First run**, from the app: Activity → *Update location data* (repeat until locations are filled), *Find new businesses*, then Results → *Run fit screen*, and approve the matches you like under To review. Approved matches are analysed hourly, or press *Analyse now* on a match.
+**Using it.** The app has three main pages:
+- **Niches**: wellness concepts that need land or a building. *Discover new niches* finds unusual ones; *Write up* researches one (how it works, what's different, real examples, rough economics). Star the ones you like and press *Use this niche* to pair it with your places.
+- **Locations**: describe what you want in a place, add and star your own places, and get *Suggested places* that match your description. Each place gets a 0–10 match score with pros and cons, plus sourced local costs.
+- **Business ideas**: every niche you use × every place you keep, ranked by fit, money and your description. *Analyse this idea* runs the full analysis (local price research, 2,000-run simulation, independent check).
 
 ### Recreating it on a new project
 ```bash
