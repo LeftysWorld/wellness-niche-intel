@@ -102,4 +102,17 @@ export const KEY_GUIDE: Record<string, string> = {
   'exit.country_discount': 'Discount a buyer would apply for country risk, currency and title (0 to 0.6)',
   'land.appreciation_pct': 'Typical annual rural land appreciation, as a fraction',
   'finance.rate_pct': 'Interest rate (percent) for a small-business real estate loan available to the owner',
+  'build.cost_per_sqft_usd': 'Construction cost per square foot (USD) for a simple new cabin or small lodging building, including labor and materials',
+  'price.lodging_night_usd': 'Price per night (USD) for a private room or cabin at a wellness retreat, eco-lodge or glamping site',
 };
+
+/**
+ * Index values are a place's own figure divided by the same figure for the
+ * reference place (western North Carolina = 1.0). The scout finds the raw
+ * figure for each place; code does the division.
+ */
+export const INDEX_RAW: Record<string, string> = {
+  'build.cost_index': 'build.cost_per_sqft_usd',
+  'price.index': 'price.lodging_night_usd',
+};
+export const INDEX_REFERENCE_SLUG = 'us-nc-madison';

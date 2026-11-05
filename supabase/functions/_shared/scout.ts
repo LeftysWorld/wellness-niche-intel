@@ -4,7 +4,7 @@
 // figures is written with a confidence set by how many separate sites agree.
 import { db, getSetting, must, type Models } from './db.ts';
 import { fetchText } from './search.ts';
-import { KEY_GUIDE, REQUIRED_LOCATION_KEYS, writeAssumptions, type LocationRow, type NewAssumption } from './ledger.ts';
+import { INDEX_RAW, INDEX_REFERENCE_SLUG, KEY_GUIDE, REQUIRED_LOCATION_KEYS, writeAssumptions, type LocationRow, type NewAssumption } from './ledger.ts';
 import { ask } from './llm.ts';
 import { BudgetExceeded, type Run } from './runs.ts';
 import { search, type SearchHit } from './search.ts';
@@ -36,8 +36,15 @@ export async function scoutLocation(run: Run, locationId: string, opts: { keys?:
     const m = misses[k];
     return !opts.force && m && m.count > 0 && m.count % 3 === 0 && Date.now() - Date.parse(m.last) < 30 * 86_400_000;
   };
-  const keys = wanted.filter((k) => (location.level === 'country' ? countryOnly.has(k) : !countryOnly.has(k)) && !resting(k));
-  if (!keys.length) return { location: location.slug, written: 0, skipped: 'nothing missing or stale' };
+  const levelKeys = wanted.filter((k) => (location.level === 'country' ? countryOnly.has(k) : !countryOnly.has(k)));
+  // Index values are computed from a raw figure searched for this place.
+  const indexKeys = levelKeys.filter((k) => INDEX_RAW[k]);
+  const rawWanted = indexKeys.map((k) => INDEX_RAW[k]).filter((r) => {
+    const c = have.get(r);
+    return opts.force || !c || c.is_stale;
+  });
+  const keys = [...levelKeys.filter((k) => !INDEX_RAW[k]), ...rawWanted].filter((k) => !resting(k));
+  if (!keys.length && !indexKeys.length) return { location: location.slug, written: 0, skipped: 'nothing missing or stale' };
 
   const country = location.parent_id
     ? (must(await db().from('locations').select('name').eq('id', location.parent_id).maybeSingle(), 'country')?.name as string | undefined)
@@ -146,8 +153,67 @@ export async function scoutLocation(run: Run, locationId: string, opts: { keys?:
     };
     written.push(...(await writeAssumptions(run, 'location-scout', [row])));
   }
+  for (const key of indexKeys) {
+    const r = await writeIndex(run, location, key);
+    if (r.written) {
+      written.push(...r.written);
+      delete misses[key];
+    } else skipped.push({ key, reason: r.reason ?? 'not computed', note: '' });
+  }
   await db().from('locations').update({ profile: { ...(location.profile ?? {}), scout_misses: misses } }).eq('id', location.id);
-  return { location: location.slug, asked: keys.length, written: written.length, skipped };
+  return { location: location.slug, asked: keys.length + indexKeys.length, written: written.length, skipped };
+}
+
+type RawValue = { value_num: number; low: number | null; high: number | null; source_url: string | null; confidence: 'high' | 'medium' | 'low' };
+
+async function currentRaw(locationId: string, key: string): Promise<RawValue | null> {
+  const { data } = await db()
+    .from('current_assumptions')
+    .select('value_num,low,high,source_url,confidence')
+    .eq('subject_type', 'location')
+    .eq('subject_id', locationId)
+    .eq('key', key)
+    .maybeSingle();
+  return data?.value_num != null && data.source_url ? (data as RawValue) : null;
+}
+
+/** Index = this place's raw figure / the reference place's raw figure. */
+async function writeIndex(run: Run, location: LocationRow, key: string): Promise<{ written?: string[]; reason?: string }> {
+  const rawKey = INDEX_RAW[key];
+  const ref = must(await db().from('locations').select('*').eq('slug', INDEX_REFERENCE_SLUG).maybeSingle(), 'reference place') as LocationRow | null;
+  if (!ref) return { reason: 'reference place missing' };
+  const mine = await currentRaw(location.id, rawKey);
+  if (!mine) return { reason: `${rawKey} not found yet` };
+  if (ref.id === location.id) {
+    // The reference is 1.0 by definition, sourced by its own raw figure.
+    return {
+      written: await writeAssumptions(run, 'location-scout', [{
+        subject_type: 'location', subject_id: location.id, key, value_num: 1, low: 1, high: 1, unit: 'ratio', currency: null,
+        source_url: mine.source_url, source_note: `Reference place for ${key} (= 1.0); its ${rawKey} is ${mine.value_num}.`,
+        confidence: mine.confidence, stale_after: '365 days',
+      }]),
+    };
+  }
+  let base = await currentRaw(ref.id, rawKey);
+  if (!base) {
+    await scoutLocation(run, ref.id, { keys: [key] });
+    base = await currentRaw(ref.id, rawKey);
+  }
+  if (!base || base.value_num <= 0) return { reason: `reference ${rawKey} not found yet` };
+  const r3 = (n: number) => Math.round(n * 1000) / 1000;
+  const conf = [mine.confidence, base.confidence].includes('low') ? 'low' : [mine.confidence, base.confidence].includes('medium') ? 'medium' : 'high';
+  return {
+    written: await writeAssumptions(run, 'location-scout', [{
+      subject_type: 'location', subject_id: location.id, key,
+      value_num: r3(mine.value_num / base.value_num),
+      low: r3((mine.low ?? mine.value_num) / (base.high ?? base.value_num)),
+      high: r3((mine.high ?? mine.value_num) / (base.low ?? base.value_num)),
+      unit: 'ratio', currency: null,
+      source_url: mine.source_url,
+      source_note: `Computed: ${location.name} ${rawKey} ${mine.value_num} / ${ref.name} ${base.value_num}. Reference source: ${base.source_url}`,
+      confidence: conf, stale_after: '365 days',
+    }]),
+  };
 }
 
 function queryFor(key: string, l: LocationRow): string {
