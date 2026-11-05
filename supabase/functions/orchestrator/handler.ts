@@ -119,6 +119,19 @@ export async function run(body: Record<string, unknown>) {
     });
   }
 
+  if (task === 'fx') {
+    // Weekly exchange rates from a free public source (no key needed).
+    const res = await fetch('https://open.er-api.com/v6/latest/USD', { signal: AbortSignal.timeout(10000) });
+    if (!res.ok) throw new HttpError(502, `Exchange-rate source returned ${res.status}`);
+    const body = await res.json();
+    const rates = body.rates ?? {};
+    if (!rates.COP) throw new HttpError(502, 'Exchange-rate source returned no COP rate');
+    const current = must(await db().from('settings').select('value').eq('key', 'currency').single(), 'currency').value;
+    const value = { ...current, cop_per_usd: rates.COP, crc_per_usd: rates.CRC, updated_at: new Date().toISOString(), source: 'https://open.er-api.com/v6/latest/USD' };
+    await db().from('settings').update({ value }).eq('key', 'currency');
+    return { currency: value };
+  }
+
   if (task === 'digest') {
     return withRun('digest', { tokenBudget: 0, searchBudget: 0, input: body }, () => digest());
   }

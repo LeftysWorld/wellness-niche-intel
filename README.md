@@ -53,7 +53,7 @@ Every number the model uses (land price, lease, wages, taxes, prices, occupancyâ
 | fit screen | Mondays 11:17 |
 | digest | Mondays 13:33 |
 
-Each run has its own token and search budget, and all runs together share daily and monthly caps (`settings.budgets`: 1.5M tokens a day, 15M a month, 60 searches a day, 900 a month, inside Tavily's 1,000 free). A run that hits a cap stops as `budget_exceeded`; the Activity page shows usage against the caps and flags any failures in the last 24 hours. Jobs that must not overlap (analysis, refresh, fit screen, site checks) take a lock, and runs that die mid-way are marked failed after 30 minutes.
+Each run has its own token and search budget, and all runs together share daily and monthly caps (`settings.budgets`: 1.5M tokens a day, 15M a month, 150 searches a day, 900 a month, inside Tavily's 1,000 free). A run that hits a cap stops as `budget_exceeded`; the Activity page shows usage against the caps and flags any failures in the last 24 hours. Jobs that must not overlap (analysis, refresh, fit screen, site checks) take a lock, and runs that die mid-way are marked failed after 30 minutes.
 
 ## Setup
 
