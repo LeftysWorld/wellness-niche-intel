@@ -1,8 +1,10 @@
-// Anthropic Messages API client. Every call forces a single tool so the model
-// returns JSON that matches a schema; nothing is parsed from free text.
+// Anthropic Messages API client. Every call uses structured outputs
+// (output_config.format with a JSON schema), so the reply is guaranteed to be
+// JSON matching the schema; nothing is parsed from free-form prose.
 // The API key is read from the ANTHROPIC_API_KEY function secret.
 import { db } from './db.ts';
 import type { Run } from './runs.ts';
+import { strictSchema } from './schema.ts';
 
 export interface JsonSchema {
   type: 'object';
@@ -33,10 +35,9 @@ export async function ask<T>(opts: AskOptions): Promise<T> {
       body: JSON.stringify({
         model: opts.model,
         max_tokens: maxTokens,
-        system: opts.system,
+        system: `${opts.system}\n\nReply with JSON only: ${opts.tool.description}.`,
         messages: [{ role: 'user', content: opts.prompt }],
-        tools: [{ name: opts.tool.name, description: opts.tool.description, input_schema: opts.tool.schema }],
-        tool_choice: { type: 'tool', name: opts.tool.name },
+        output_config: { format: { type: 'json_schema', schema: strictSchema(opts.tool.schema) } },
       }),
     });
     if (res.status === 429 || res.status >= 500) {
@@ -57,9 +58,13 @@ export async function ask<T>(opts: AskOptions): Promise<T> {
       calls: 1,
     });
     await opts.run.charge(input + output);
-    const block = (body.content ?? []).find((c: { type: string }) => c.type === 'tool_use');
-    if (!block) throw new Error('Model did not return the required tool call');
-    return block.input as T;
+    if (body.stop_reason === 'max_tokens') throw new Error(`Reply was cut off at ${maxTokens} tokens`);
+    const text = (body.content ?? []).filter((c: { type: string }) => c.type === 'text').map((c: { text: string }) => c.text).join('');
+    try {
+      return JSON.parse(text) as T;
+    } catch {
+      throw new Error(`Model reply was not valid JSON: ${text.slice(0, 200)}`);
+    }
   }
   throw new Error(`Anthropic unavailable after retries: ${lastErr}`);
 }

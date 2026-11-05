@@ -62,7 +62,11 @@ const CARD_SCHEMA = {
             required: ['key', 'label', 'units', 'sellablePerUnitPerMonth', 'price', 'startOccupancy', 'matureOccupancy', 'monthsToMature'],
           },
         },
-        perSale: { type: 'object', description: 'stream key → {usd: tri, scale: "price"|"none"}' },
+        perSale: {
+          type: 'array',
+          description: 'Cost per unit sold, per stream (food, linens, consumables)',
+          items: { type: 'object', properties: { stream: { type: 'string' }, usd: tri, scale: { type: 'string', enum: ['price', 'none'] } }, required: ['stream', 'usd', 'scale'] },
+        },
         fixed: {
           type: 'array',
           items: {
@@ -166,9 +170,15 @@ async function draftNiche(run: Run, models: Models, nicheId: string) {
       'Draft the card. List real operating businesses you can see in the results under operating_examples (cite the [n]). Streams with one unit and one sale a month are flat monthly revenue lines. Template items: build-scaled for construction, equipment-scaled for kit; include a lease deposit item (leaseMonths) and items marked own/lease where they differ. List the URLs you relied on in sources.',
     ].join('\n\n'),
     tool: { name: 'niche_card', description: 'The drafted niche card', schema: CARD_SCHEMA },
-    maxTokens: 6000,
+    maxTokens: 10000,
   });
 
+  // The schema returns per-sale costs as a list; the engine wants a map by stream.
+  // deno-lint-ignore no-explicit-any
+  const perSaleList = (draft.model as any).perSale;
+  if (Array.isArray(perSaleList)) {
+    draft.model.perSale = Object.fromEntries(perSaleList.map((p: { stream: string; usd: unknown; scale: string }) => [p.stream, { usd: p.usd, scale: p.scale }])) as NicheModelSpec['perSale'];
+  }
   const problems = smokeTest(draft.model, draft.template);
   const { model, template, risk_tags, operating_examples, ...rest } = draft;
   let examplesAdded = 0;
