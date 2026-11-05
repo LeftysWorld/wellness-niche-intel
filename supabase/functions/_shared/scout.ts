@@ -6,7 +6,7 @@ import { db, getSetting, must, type Models } from './db.ts';
 import { fetchText } from './search.ts';
 import { KEY_GUIDE, REQUIRED_LOCATION_KEYS, writeAssumptions, type LocationRow, type NewAssumption } from './ledger.ts';
 import { ask } from './llm.ts';
-import type { Run } from './runs.ts';
+import { BudgetExceeded, type Run } from './runs.ts';
 import { search, type SearchHit } from './search.ts';
 import { consensus, type Observation } from './consensus.ts';
 
@@ -58,12 +58,14 @@ export async function scoutLocation(run: Run, locationId: string, opts: { keys?:
       continue;
     }
     type Out = { found: boolean; unit: string; note: string; values: { value: number; source_index: number; quote: string }[] };
-    const out = await ask<Out>({
+    let out: Out;
+    try {
+    out = await ask<Out>({
       run,
       // Numbers feed the money model directly, so they get the mid-tier model.
       model: models.numbers ?? models.judgment,
       system:
-        'You extract every figure for one value from search results, each with its source and an exact quote. Report one entry per listing, statistic or source (not one summary figure). Convert currency and units to what is asked (e.g. hectares to acres, yearly to monthly) and say how in the note. Use figures about this place or the closest comparable nearby. Set found=false only when nothing in the results is about this value.',
+        'You extract every figure for one value from search results, each with its source and an exact quote. Report one entry per listing, statistic or source (not one summary figure), at most 12 entries. Keep each quote short: just the words around the figure, under 25 words. Keep the note under 40 words. Convert currency and units to what is asked (e.g. hectares to acres, yearly to monthly) and say how in the note. Use figures about this place or the closest comparable nearby. Set found=false only when nothing in the results is about this value.',
       prompt: [
         `Location: ${location.name}${country ? `, ${country}` : ''} (${location.country_code}).`,
         `Value wanted (${key}): ${KEY_GUIDE[key] ?? key}.`,
@@ -95,13 +97,20 @@ export async function scoutLocation(run: Run, locationId: string, opts: { keys?:
           required: ['found', 'unit', 'note', 'values'],
         },
       },
-      maxTokens: 2000,
+      maxTokens: 4000,
     });
+    } catch (e) {
+      if (e instanceof BudgetExceeded) throw e;
+      // One value failing must not stop the rest; it is retried with the next strategy.
+      skipped.push({ key, reason: 'extraction failed', note: (e as Error).message });
+      misses[key] = { count: attempt + 1, last: new Date().toISOString() };
+      continue;
+    }
 
     // Confirm each quote against the result text, then the page itself (a few pages at most).
     const observations: Observation[] = [];
     let fetched = 0;
-    for (const v of out.found ? out.values : []) {
+    for (const v of out.found ? out.values.slice(0, 12) : []) {
       const source = hits[v.source_index];
       if (!source) continue;
       const quote = squash(v.quote ?? '');
