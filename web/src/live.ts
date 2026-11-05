@@ -47,6 +47,7 @@ export async function loadLive(
 }
 
 /** Lease and buy (where allowed), best first, with the year-3 sensitivity table. */
-export function computeLive(i: LiveInputs, simulations = 1000): Candidate[] {
+// 300 simulations, like the screening, so the page shows exactly the numbers on the idea card.
+export function computeLive(i: LiveInputs, simulations = 300): Candidate[] {
   return evaluateBuilt({ niche: i.niche, template: i.template, location: i.location, ledger: i.ledger, profile: i.profile, simulations, sensitivity: true });
 }
