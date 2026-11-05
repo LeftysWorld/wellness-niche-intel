@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { callAgent, supabase, usd } from '../supabase.ts';
-import { FilterLayout, useFilters } from '../filters.tsx';
+import { FilterLayout, ratingField, useFilters } from '../filters.tsx';
 import { Err, Loading, RunButton, Section, useLoad } from '../ui.tsx';
 
 export function Niches() {
@@ -16,12 +16,16 @@ export function Niches() {
     // Best screened idea per niche, so a new niche can be judged before it is approved.
     const { data: ideas } = await supabase
       .from('pairings')
-      .select('niche_id,scores,locations(name)')
+      .select('niche_id,scores,score_total,locations(name)')
       .neq('status', 'screened_out')
       .not('scores', 'is', null);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const best: Record<string, any> = {};
+    const topScore: Record<string, number> = {};
     for (const i of ideas ?? []) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const st = (i as any).score_total;
+      if (st !== null && st !== undefined) topScore[i.niche_id] = Math.max(topScore[i.niche_id] ?? -Infinity, Number(st));
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const sc = (i as any).scores;
       if (sc?.target_year_figure === undefined) continue;
@@ -29,7 +33,7 @@ export function Niches() {
       const better = !cur || Number(sc.fundable) > Number(cur.scores.fundable) || (sc.fundable === cur.scores.fundable && sc.target_year_figure > cur.scores.target_year_figure);
       if (better) best[i.niche_id] = i;
     }
-    return (data ?? []).map((n) => ({ ...n, best: best[n.id] ?? null }));
+    return (data ?? []).map((n) => ({ ...n, best: best[n.id] ?? null, bestScore: topScore[n.id] ?? null }));
   });
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -47,6 +51,8 @@ export function Niches() {
     ],
     fields: [
       { key: 'text', label: 'Text', type: 'text', get: (n) => [n.card?.summary, n.card?.description, n.card?.unique_angle, n.card?.why_interesting, n.card?.revenue_units, n.card?.price_model, (n.example_businesses ?? []).map((e: N) => `${e.name} ${e.locality ?? ''} ${e.country ?? ''}`).join(' ')].join(' ') },
+      ratingField<N>('demand', 'Demand score', (n) => n.card?.demand_score),
+      ratingField<N>('bestFit', 'Best idea fit score', (n) => n.bestScore),
       { key: 'status', label: 'Status', type: 'enum', group: 'Niche', get: (n) => STATUS_LABEL(n.status), order: ['In use', 'New idea', 'Not for me'] },
       { key: 'fav', label: 'Starred', type: 'bool', group: 'Niche', get: (n) => n.favorite },
       { key: 'written', label: 'Written up', type: 'bool', group: 'Niche', get: (n) => Boolean(n.card?.model) },

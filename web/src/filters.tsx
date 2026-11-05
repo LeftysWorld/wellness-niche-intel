@@ -366,6 +366,23 @@ function EnumFilter<T>({
   );
 }
 
+export const RATING_BANDS = ['8–10 Excellent', '6–8 Good', '4–6 Fair', 'Under 4 Weak', 'Not rated'];
+
+/** A 0–10 score as tickable bands, under the Ratings heading. */
+export function ratingField<T>(key: string, label: string, get: (row: T) => unknown): Field<T> {
+  return {
+    key: `rating:${key}`,
+    label,
+    type: 'enum',
+    group: 'Ratings',
+    order: RATING_BANDS,
+    get: (row) => {
+      const v = asNum(get(row));
+      return v === null ? 'Not rated' : v >= 8 ? RATING_BANDS[0] : v >= 6 ? RATING_BANDS[1] : v >= 4 ? RATING_BANDS[2] : RATING_BANDS[3];
+    },
+  };
+}
+
 /** Page layout with the filter panel on the left (a toggle on small screens). */
 export function FilterLayout({ panel, active, children }: { panel: ReactNode; active: number; children: ReactNode }) {
   const [open, setOpen] = useState(false);

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { callAgent, supabase, usd } from '../supabase.ts';
-import { FilterLayout, useFilters } from '../filters.tsx';
+import { FilterLayout, ratingField, useFilters } from '../filters.tsx';
 import { Err, EvidenceBadge, Loading, RunButton, Section, useLoad } from '../ui.tsx';
 
 // A business idea = one niche run in one place, with the engine's numbers.
@@ -92,6 +92,9 @@ export function Ideas() {
     defaults: { enums: { status: ['Screened', 'Queued for full analysis', 'Analysed', 'Analysed and checked'] } },
     fields: [
       { key: 'text', label: 'Text', type: 'text', get: (r) => [r.p.niches?.card?.summary, r.p.niches?.card?.unique_angle, (r.p.hard_filter_reasons ?? []).join(' ')].join(' ') },
+      ratingField<Row>('fit', 'Fit score', (r) => r.p.score_total),
+      ratingField<Row>('match', 'Place match', (r) => r.p.locations?.fit?.score),
+      ratingField<Row>('demand', 'Niche demand', (r) => r.p.niches?.card?.demand_score),
       { key: 'status', label: 'Status', type: 'enum', group: 'Idea', get: (r) => STATUS[r.p.status] ?? r.p.status, order: Object.values(STATUS) },
       { key: 'meets', label: 'Meets my target in year 1', type: 'bool', group: 'Idea', get: (r) => (r.v.y1 ?? -Infinity) >= target },
       { key: 'fundable', label: 'Fundable with my cash', type: 'bool', group: 'Idea', get: (r) => r.v.fundable },

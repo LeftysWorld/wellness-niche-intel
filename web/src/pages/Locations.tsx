@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { callAgent, supabase, usd } from '../supabase.ts';
-import { FilterLayout, useFilters } from '../filters.tsx';
+import { FilterLayout, ratingField, useFilters } from '../filters.tsx';
 import { Err, Loading, RunButton, Section, useLoad } from '../ui.tsx';
 
 interface Place {
@@ -217,6 +217,7 @@ export function Locations() {
     ],
     fields: [
       { key: 'text', label: 'Text', type: 'text', get: (r) => [r.p.notes, r.p.fit?.summary, ...(r.p.fit?.pros ?? []), ...(r.p.fit?.cons ?? []), ...(r.p.fit?.unknowns ?? [])].join(' ') },
+      ratingField<PlaceRow>('match', 'Match to my description', (r) => r.p.fit?.score),
       { key: 'list', label: 'List', type: 'enum', group: 'Place', get: (r) => r.list, order: ['My places', 'Suggested', 'Removed'] },
       { key: 'country', label: 'Country', type: 'enum', group: 'Place', get: (r) => r.country },
       { key: 'fav', label: 'Starred', type: 'bool', group: 'Place', get: (r) => r.p.favorite },
