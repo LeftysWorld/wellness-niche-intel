@@ -116,7 +116,7 @@ async function draftNiche(run: Run, models: Models, nicheId: string) {
         key_assumptions: { type: 'array', items: obj({ name: str, value: str, supported: { type: 'string', enum: ['yes', 'partly', 'no'] } }) },
       }),
     },
-    maxTokens: 2500,
+    maxTokens: 5000,
   });
   const card = {
     ...(niche.card ?? {}),
@@ -170,7 +170,7 @@ async function brainstorm(run: Run, models: Models) {
         required: ['ideas'],
       },
     },
-    maxTokens: 2500,
+    maxTokens: 5000,
   });
   const added: string[] = [];
   const skipped: string[] = [];
