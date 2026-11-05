@@ -1,16 +1,9 @@
 import { useState } from 'react';
 import { callAgent, supabase, usd } from '../supabase.ts';
+import { FilterLayout, useFilters } from '../filters.tsx';
 import { Err, Loading, RunButton, Section, useLoad } from '../ui.tsx';
 
-const FILTERS = [
-  ['all', 'All'],
-  ['starred', 'Starred'],
-  ['new', 'New ideas'],
-  ['use', 'In use'],
-] as const;
-
 export function Niches() {
-  const [filter, setFilter] = useState<(typeof FILTERS)[number][0]>('all');
   const [open, setOpen] = useState<string | null>(null);
   const { data, error, reload } = useLoad(async () => {
     const { data, error } = await supabase
@@ -39,9 +32,41 @@ export function Niches() {
     return (data ?? []).map((n) => ({ ...n, best: best[n.id] ?? null }));
   });
 
-  const list = (data ?? []).filter((n) =>
-    filter === 'starred' ? n.favorite : filter === 'new' ? n.status === 'proposed' : filter === 'use' ? n.status === 'approved' : n.status !== 'rejected',
-  );
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  type N = any;
+  const STATUS_LABEL = (st: string) => (st === 'approved' ? 'In use' : st === 'proposed' ? 'New idea' : st === 'rejected' ? 'Not for me' : st);
+  const f = useFilters<N>({
+    tab: 'niches',
+    rows: data ?? [],
+    defaults: { enums: { status: ['In use', 'New idea'] } },
+    sorts: [
+      { key: 'starred', label: 'Starred, then strongest signal', cmp: (a, b) => Number(b.favorite) - Number(a.favorite) || (b.signal_score ?? 0) - (a.signal_score ?? 0) },
+      { key: 'money', label: 'Best year-1 take-home', cmp: (a, b) => (b.best?.scores?.target_year_figure ?? -1e9) - (a.best?.scores?.target_year_figure ?? -1e9) },
+      { key: 'demand', label: 'Demand score', cmp: (a, b) => (b.card?.demand_score ?? -1) - (a.card?.demand_score ?? -1) },
+      { key: 'name', label: 'Name A–Z', cmp: (a, b) => String(a.name).localeCompare(String(b.name)) },
+    ],
+    fields: [
+      { key: 'text', label: 'Text', type: 'text', get: (n) => [n.card?.summary, n.card?.description, n.card?.unique_angle, n.card?.why_interesting, n.card?.revenue_units, n.card?.price_model, (n.example_businesses ?? []).map((e: N) => `${e.name} ${e.locality ?? ''} ${e.country ?? ''}`).join(' ')].join(' ') },
+      { key: 'status', label: 'Status', type: 'enum', group: 'Niche', get: (n) => STATUS_LABEL(n.status), order: ['In use', 'New idea', 'Not for me'] },
+      { key: 'fav', label: 'Starred', type: 'bool', group: 'Niche', get: (n) => n.favorite },
+      { key: 'written', label: 'Written up', type: 'bool', group: 'Niche', get: (n) => Boolean(n.card?.model) },
+      { key: 'review', label: 'Independent check', type: 'enum', group: 'Niche', get: (n) => (n.card?.review?.verdict ? ({ pass: 'Passed', flag: 'Flagged', fail: 'Failed' } as Record<string, string>)[String(n.card.review.verdict)] ?? n.card.review.verdict : 'Not checked'), order: ['Passed', 'Flagged', 'Failed', 'Not checked'] },
+      { key: 'site', label: 'Site type', type: 'enum', group: 'Niche', get: (n) => (n.card?.model ? n.card.model.siteType ?? 'house' : null) },
+      { key: 'needs', label: 'Needs', type: 'enum', group: 'Niche', get: (n) => n.risk_tags ?? [] },
+      { key: 'fundable', label: 'Fundable somewhere', type: 'bool', group: 'Money', get: (n) => n.best?.scores?.fundable },
+      { key: 'y1', label: 'Best year 1 /mo', type: 'number', group: 'Money', get: (n) => n.best?.scores?.target_year_figure, fmt: usd },
+      { key: 'y3', label: 'Best year 3 /mo', type: 'number', group: 'Money', get: (n) => n.best?.scores?.year3_figure, fmt: usd },
+      { key: 'bestPlace', label: 'Best place', type: 'enum', group: 'Money', get: (n) => n.best?.locations?.name },
+      { key: 'demand', label: 'Demand score /10', type: 'number', group: 'Evidence', get: (n) => n.card?.demand_score },
+      { key: 'signal', label: 'Signal score', type: 'number', group: 'Evidence', get: (n) => n.signal_score },
+      { key: 'examples', label: 'Operating examples', type: 'number', group: 'Evidence', get: (n) => (n.example_businesses ?? []).length },
+      { key: 'exCountry', label: 'Example countries', type: 'enum', group: 'Evidence', get: (n) => [...new Set((n.example_businesses ?? []).map((e: N) => e.country).filter(Boolean))] },
+      { key: 'openLease', label: 'Months to open (lease)', type: 'number', group: 'Setup', get: (n) => n.card?.model?.buildMonths?.lease?.mode },
+      { key: 'openOwn', label: 'Months to open (build)', type: 'number', group: 'Setup', get: (n) => n.card?.model?.buildMonths?.own?.mode },
+      { key: 'hours', label: 'On-site hours/month', type: 'number', group: 'Setup', get: (n) => n.card?.model?.openHoursPerMonth },
+    ],
+  });
+  const list = f.rows;
 
   async function set(id: string, patch: Record<string, unknown>) {
     await supabase.from('niches').update(patch).eq('id', id);
@@ -52,6 +77,7 @@ export function Niches() {
   }
 
   return (
+    <FilterLayout panel={f.panel} active={f.active}>
     <Section
       title="Niches"
       actions={
@@ -64,19 +90,13 @@ export function Niches() {
       <p className="muted small">
         Wellness businesses that need land or a building. New ideas are written up by the AI with real examples; use one to pair it with your places.
       </p>
-      <div className="filters tabs">
-        {FILTERS.map(([k, label]) => (
-          <button key={k} className={filter === k ? 'on' : ''} onClick={() => setFilter(k)}>
-            {label}
-          </button>
-        ))}
-      </div>
+      {f.summary}
       <Err error={error} />
       {!data ? (
         <Loading />
       ) : (
         <div className="cards">
-          {list.map((n) => {
+          {list.map((n: N) => {
             const c = n.card ?? {};
             const written = Boolean(c.model);
             const examples = n.example_businesses ?? [];
@@ -190,5 +210,6 @@ export function Niches() {
         </div>
       )}
     </Section>
+    </FilterLayout>
   );
 }

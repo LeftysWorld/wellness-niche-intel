@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { callAgent, supabase, usd } from '../supabase.ts';
+import { FilterLayout, useFilters } from '../filters.tsx';
 import { Err, Loading, RunButton, Section, useLoad } from '../ui.tsx';
 
 interface Place {
@@ -170,8 +171,11 @@ function AddPlace({ countries, onAdded }: { countries: Place[]; onAdded: () => v
   );
 }
 
+type PlaceRow = { p: Place; list: 'My places' | 'Suggested' | 'Removed'; facts: Record<string, Fact | undefined>; country: string; missed: string[] };
+
+const ORIGIN: Record<string, string> = { user: 'Added by me', ai_suggested: 'AI suggested', seed: 'Starter list' };
+
 export function Locations() {
-  const [favOnly, setFavOnly] = useState(false);
   const { data, error, reload } = useLoad(async () => {
     const { data: places, error } = await supabase.from('locations').select('*').order('name');
     if (error) throw error;
@@ -182,20 +186,66 @@ export function Locations() {
       .eq('subject_type', 'location')
       .in('subject_id', ids)
       .in('key', FACTS.map((f) => f[0]));
-    return { places: (places ?? []) as Place[], facts: facts ?? [] };
+    return { places: (places ?? []) as Place[], facts: (facts ?? []) as Fact[] };
+  });
+
+  const places = data?.places ?? [];
+  const byId = new Map(places.map((p) => [p.id, p]));
+  const fact = (p: Place, key: string): Fact | undefined =>
+    (data?.facts.find((f) => f.subject_id === p.id && f.key === key) ?? data?.facts.find((f) => f.subject_id === p.parent_id && f.key === key)) as Fact | undefined;
+  const isGuess = (f?: Fact) => !f || f.written_by.includes('estimate') || !f.source_url;
+  const rows: PlaceRow[] = places
+    .filter((p) => p.level === 'micro_area')
+    .map((p): PlaceRow => ({
+      p,
+      list: p.active ? 'My places' : p.origin === 'ai_suggested' && !p.fit?.dismissed ? 'Suggested' : 'Removed',
+      facts: Object.fromEntries(FACTS.map(([k]) => [k, fact(p, k)])),
+      country: byId.get(p.parent_id ?? '')?.name ?? p.country_code,
+      missed: Object.keys((p.profile?.scout_misses ?? {}) as Record<string, unknown>),
+    }));
+  const num = (key: string) => (r: PlaceRow) => r.facts[key]?.value_num ?? null;
+  const f = useFilters<PlaceRow>({
+    tab: 'locations',
+    rows,
+    defaults: { enums: { list: ['My places', 'Suggested'] } },
+    sorts: [
+      { key: 'starred', label: 'Starred, then best match', cmp: (a, b) => Number(b.p.favorite) - Number(a.p.favorite) || (b.p.fit?.score ?? -1) - (a.p.fit?.score ?? -1) },
+      { key: 'match', label: 'Best match', cmp: (a, b) => (b.p.fit?.score ?? -1) - (a.p.fit?.score ?? -1) },
+      { key: 'cheapLease', label: 'Cheapest house lease', cmp: (a, b) => (num('lease.finca_monthly_usd')(a) ?? 1e12) - (num('lease.finca_monthly_usd')(b) ?? 1e12) },
+      { key: 'cheapLand', label: 'Cheapest land', cmp: (a, b) => (num('land.price_per_acre_usd')(a) ?? 1e12) - (num('land.price_per_acre_usd')(b) ?? 1e12) },
+      { key: 'name', label: 'Name A–Z', cmp: (a, b) => a.p.name.localeCompare(b.p.name) },
+    ],
+    fields: [
+      { key: 'text', label: 'Text', type: 'text', get: (r) => [r.p.notes, r.p.fit?.summary, ...(r.p.fit?.pros ?? []), ...(r.p.fit?.cons ?? []), ...(r.p.fit?.unknowns ?? [])].join(' ') },
+      { key: 'list', label: 'List', type: 'enum', group: 'Place', get: (r) => r.list, order: ['My places', 'Suggested', 'Removed'] },
+      { key: 'country', label: 'Country', type: 'enum', group: 'Place', get: (r) => r.country },
+      { key: 'fav', label: 'Starred', type: 'bool', group: 'Place', get: (r) => r.p.favorite },
+      { key: 'origin', label: 'Where it came from', type: 'enum', group: 'Place', get: (r) => ORIGIN[r.p.origin] ?? r.p.origin },
+      { key: 'match', label: 'Match to my description /10', type: 'number', group: 'Place', get: (r) => r.p.fit?.score },
+      { key: 'scored', label: 'Scored against my description', type: 'bool', group: 'Place', get: (r) => r.p.fit?.score !== undefined },
+      ...FACTS.map(([key, label]) => ({ key, label, type: 'number' as const, group: 'Local costs', get: num(key), fmt: key.startsWith('demand') ? (v: number) => Math.round(v).toLocaleString() : usd })),
+      {
+        key: 'data',
+        label: 'Data quality',
+        type: 'enum',
+        group: 'Data',
+        get: (r) => {
+          const guessed = FACTS.filter(([k]) => isGuess(r.facts[k])).length;
+          return guessed === 0 ? 'All sourced' : guessed <= FACTS.length / 2 ? 'Some estimates' : 'Mostly estimates';
+        },
+        order: ['All sourced', 'Some estimates', 'Mostly estimates'],
+      },
+      { key: 'searching', label: 'Scout still searching', type: 'bool', group: 'Data', get: (r) => r.missed.length > 0 || FACTS.some(([k]) => isGuess(r.facts[k])) },
+    ],
   });
 
   if (error) return <Err error={error} />;
   if (!data) return <Loading />;
-  const countries = data.places.filter((p) => p.level === 'country');
-  const byId = new Map(data.places.map((p) => [p.id, p]));
-  const fact = (p: Place, key: string): Fact | undefined =>
-    (data.facts.find((f) => f.subject_id === p.id && f.key === key) ?? data.facts.find((f) => f.subject_id === p.parent_id && f.key === key)) as Fact | undefined;
+  const countries = places.filter((p) => p.level === 'country');
+  const mine = f.rows.filter((r) => r.list === 'My places').map((r) => r.p);
+  const suggested = f.rows.filter((r) => r.list === 'Suggested').map((r) => r.p);
+  const removed = f.rows.filter((r) => r.list === 'Removed').map((r) => r.p);
   const missedKeys = (p: Place): string[] => Object.keys((p.profile?.scout_misses ?? {}) as Record<string, unknown>);
-  const mine = data.places
-    .filter((p) => p.level === 'micro_area' && p.active && (!favOnly || p.favorite))
-    .sort((a, b) => Number(b.favorite) - Number(a.favorite) || (b.fit?.score ?? -1) - (a.fit?.score ?? -1));
-  const suggested = data.places.filter((p) => p.level === 'micro_area' && !p.active && p.origin === 'ai_suggested' && !p.fit?.dismissed);
 
   const update = async (id: string, patch: Partial<Place>) => {
     await supabase.from('locations').update(patch).eq('id', id);
@@ -203,20 +253,12 @@ export function Locations() {
   };
 
   return (
-    <>
+    <FilterLayout panel={f.panel} active={f.active}>
       <Wishes />
       <AddPlace countries={countries} onAdded={reload} />
-      <Section
-        title="My places"
-        actions={
-          <>
-            <label className="small">
-              <input type="checkbox" checked={favOnly} onChange={(e) => setFavOnly(e.target.checked)} /> Starred only
-            </label>
-            <RunButton label="Re-score all" action={() => callAgent('location-fit')} onDone={reload} />
-          </>
-        }
-      >
+      {f.summary}
+      <Section title="My places" actions={<RunButton label="Re-score all" action={() => callAgent('location-fit')} onDone={reload} />}>
+        {mine.length === 0 && <p className="muted small">No places match these filters.</p>}
         <div className="cards">
           {mine.map((p) => (
             <article key={p.id} className="idea">
@@ -286,6 +328,20 @@ export function Locations() {
           </div>
         )}
       </Section>
-    </>
+      {removed.length > 0 && (
+        <Section title="Removed places">
+          <ul className="queue">
+            {removed.map((p) => (
+              <li key={p.id}>
+                <span className="summary">
+                  {p.name} <small className="muted">· {byId.get(p.parent_id ?? '')?.name ?? p.country_code}</small>
+                </span>
+                <button onClick={() => update(p.id, { active: true, fit: { ...p.fit, dismissed: false } })}>Restore</button>
+              </li>
+            ))}
+          </ul>
+        </Section>
+      )}
+    </FilterLayout>
   );
 }

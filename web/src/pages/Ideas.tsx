@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { callAgent, supabase, usd } from '../supabase.ts';
+import { FilterLayout, useFilters } from '../filters.tsx';
 import { Err, EvidenceBadge, Loading, RunButton, Section, useLoad } from '../ui.tsx';
 
 // A business idea = one niche run in one place, with the engine's numbers.
@@ -24,27 +25,25 @@ const PART_LABELS: Record<string, string> = {
   evidence: 'Sourced data',
 };
 
-type Sort = 'money' | 'score';
+const EVIDENCE = (e: any) => {
+  if (!e) return 'Not modelled';
+  const pct = Math.round((e.sourcedShare ?? 0) * 100);
+  return pct >= 70 && !e.nicheGuessed ? 'Mostly sourced' : pct >= 40 ? 'Partly guessed' : 'Mostly guessed';
+};
 
 export function Ideas() {
-  const [sort, setSort] = useState<Sort>('money');
-  const [showOut, setShowOut] = useState(false);
-  const [onlyUsed, setOnlyUsed] = useState(false);
-  const [favOnly, setFavOnly] = useState(false);
   const [open, setOpen] = useState<string | null>(null);
   const { data, error, reload } = useLoad(async () => {
-    const statuses = ['verified', 'analyzed', 'approved', 'candidate', ...(showOut ? ['screened_out'] : [])];
     const [pairings, profile] = await Promise.all([
       supabase
         .from('pairings')
-        .select('id,status,score_total,scores,hard_filter_reasons,niches(name,status,card,favorite),locations(id,name,favorite,fit),analysis_results!pairings_latest_result_fk(result,verifier_status,confidence)')
-        .in('status', statuses)
-        .limit(400),
+        .select('id,status,score_total,scores,hard_filter_reasons,niches(name,status,card,favorite),locations(id,name,favorite,fit,country_code,parent:parent_id(name)),analysis_results!pairings_latest_result_fk(result,verifier_status,confidence)')
+        .limit(1000),
       supabase.from('parameter_profiles').select('params').eq('is_default', true).single(),
     ]);
     if (pairings.error) throw pairings.error;
     return { rows: pairings.data ?? [], params: profile.data?.params ?? {} };
-  }, [showOut]);
+  });
 
   async function approve(id: string) {
     await supabase.from('pairings').update({ status: 'approved' }).eq('id', id);
@@ -73,48 +72,66 @@ export function Ideas() {
     };
   };
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const rows = (data?.rows ?? [])
-    .filter((p: any) => !onlyUsed || p.niches?.status === 'approved')
-    .filter((p: any) => !favOnly || p.locations?.favorite || p.niches?.favorite)
-    .map((p: any) => ({ p, v: view(p) }))
-    .sort((a: any, b: any) =>
-      sort === 'score'
-        ? (b.p.score_total ?? -1) - (a.p.score_total ?? -1)
-        : Number(b.v.fundable) - Number(a.v.fundable) || (b.v.y1 ?? -1e9) - (a.v.y1 ?? -1e9) || (b.v.y3 ?? -1e9) - (a.v.y3 ?? -1e9),
-    );
+  type Row = { p: any; v: ReturnType<typeof view> };
+  const all: Row[] = (data?.rows ?? []).map((p: any) => ({ p, v: view(p) }));
+  const f = useFilters<Row>({
+    tab: 'ideas',
+    rows: all,
+    sorts: [
+      {
+        key: 'money',
+        label: 'Money (fundable first)',
+        cmp: (a, b) => Number(b.v.fundable) - Number(a.v.fundable) || (b.v.y1 ?? -1e9) - (a.v.y1 ?? -1e9) || (b.v.y3 ?? -1e9) - (a.v.y3 ?? -1e9),
+      },
+      { key: 'score', label: 'Overall fit score', cmp: (a, b) => (b.p.score_total ?? -1) - (a.p.score_total ?? -1) },
+      { key: 'cash', label: 'Least cash needed', cmp: (a, b) => (a.v.cash ?? 1e12) - (b.v.cash ?? 1e12) },
+      { key: 'fast', label: 'Quickest to open', cmp: (a, b) => (a.v.months ?? 1e9) - (b.v.months ?? 1e9) },
+      { key: 'name', label: 'Name A–Z', cmp: (a, b) => String(a.p.niches?.name).localeCompare(String(b.p.niches?.name)) },
+    ],
+    // Ruled-out and rejected ideas are hidden until you tick them.
+    defaults: { enums: { status: ['Screened', 'Queued for full analysis', 'Analysed', 'Analysed and checked'] } },
+    fields: [
+      { key: 'text', label: 'Text', type: 'text', get: (r) => [r.p.niches?.card?.summary, r.p.niches?.card?.unique_angle, (r.p.hard_filter_reasons ?? []).join(' ')].join(' ') },
+      { key: 'status', label: 'Status', type: 'enum', group: 'Idea', get: (r) => STATUS[r.p.status] ?? r.p.status, order: Object.values(STATUS) },
+      { key: 'meets', label: 'Meets my target in year 1', type: 'bool', group: 'Idea', get: (r) => (r.v.y1 ?? -Infinity) >= target },
+      { key: 'fundable', label: 'Fundable with my cash', type: 'bool', group: 'Idea', get: (r) => r.v.fundable },
+      { key: 'solo', label: 'I can run it alone', type: 'bool', group: 'Idea', get: (r) => (r.v.help ?? 0) <= 0.5 },
+      { key: 'tenure', label: 'Property', type: 'enum', group: 'Idea', get: (r) => (r.v.tenure ? (r.v.tenure === 'own' ? 'Buy land' : 'Lease') : null) },
+      { key: 'evidence', label: 'Data quality', type: 'enum', group: 'Idea', get: (r) => EVIDENCE(r.v.evidence), order: ['Mostly sourced', 'Partly guessed', 'Mostly guessed', 'Not modelled'] },
+      { key: 'site', label: 'Site check', type: 'enum', group: 'Idea', get: (r) => (r.v.site?.verdict === 'unknown' ? 'Needs checking' : r.v.site?.verdict === 'fail' ? 'Fails' : r.v.site ? 'Passes' : 'Not checked') },
+      { key: 'y1', label: 'Year 1 /mo', type: 'number', group: 'Money', get: (r) => r.v.y1, fmt: usd },
+      { key: 'y3', label: 'Year 3 /mo', type: 'number', group: 'Money', get: (r) => r.v.y3, fmt: usd },
+      { key: 'cash', label: 'My cash needed', type: 'number', group: 'Money', get: (r) => r.v.cash, fmt: usd },
+      { key: 'months', label: 'Months to open', type: 'number', group: 'Money', get: (r) => r.v.months },
+      { key: 'help', label: 'Paid help h/month', type: 'number', group: 'Money', get: (r) => r.v.help },
+      { key: 'score', label: 'Fit score', type: 'number', group: 'Money', get: (r) => r.p.score_total },
+      { key: 'niche', label: 'Niche', type: 'enum', group: 'Niche', get: (r) => r.p.niches?.name },
+      { key: 'nicheUse', label: 'Niche status', type: 'enum', group: 'Niche', get: (r) => (r.p.niches?.status === 'approved' ? 'In use' : r.p.niches?.status === 'proposed' ? 'New idea' : r.p.niches?.status) },
+      { key: 'nicheFav', label: 'Starred niche', type: 'bool', group: 'Niche', get: (r) => r.p.niches?.favorite },
+      { key: 'place', label: 'Place', type: 'enum', group: 'Place', get: (r) => r.p.locations?.name },
+      { key: 'country', label: 'Country', type: 'enum', group: 'Place', get: (r) => r.p.locations?.parent?.name ?? r.p.locations?.country_code },
+      { key: 'placeFav', label: 'Starred place', type: 'bool', group: 'Place', get: (r) => r.p.locations?.favorite },
+      { key: 'match', label: 'Place match /10', type: 'number', group: 'Place', get: (r) => r.p.locations?.fit?.score },
+    ],
+  });
+  const rows = f.rows;
 
   return (
+    <FilterLayout panel={f.panel} active={f.active}>
     <Section title="Business ideas" actions={<RunButton label="Re-rank ideas" action={() => callAgent('fit-screen')} onDone={() => setTimeout(reload, 60000)} />}>
       <p className="muted small">
         Every written-up niche in every place you keep. Money figures are monthly averages for the first and third year after opening,{' '}
         {afterTax ? 'after estimated income tax' : 'before income tax'}, after loan payments and a repair reserve. Your target: {usd(target)}/month.
       </p>
-      <div className="filters">
-        <label>
-          Sort by{' '}
-          <select value={sort} onChange={(e) => setSort(e.target.value as Sort)}>
-            <option value="money">Money (fundable first)</option>
-            <option value="score">Overall fit score</option>
-          </select>
-        </label>
-        <label>
-          <input type="checkbox" checked={onlyUsed} onChange={(e) => setOnlyUsed(e.target.checked)} /> Only niches I'm using
-        </label>
-        <label>
-          <input type="checkbox" checked={favOnly} onChange={(e) => setFavOnly(e.target.checked)} /> Only starred
-        </label>
-        <label>
-          <input type="checkbox" checked={showOut} onChange={(e) => setShowOut(e.target.checked)} /> Show ruled-out
-        </label>
-      </div>
+      {f.summary}
       <Err error={error} />
       {!data ? (
         <Loading />
       ) : rows.length === 0 ? (
-        <p className="muted">No ideas yet. Write up some niches, add places, then press Re-rank ideas.</p>
+        <p className="muted">{all.length ? 'No ideas match these filters.' : 'No ideas yet. Write up some niches, add places, then press Re-rank ideas.'}</p>
       ) : (
         <div className="cards">
-          {rows.map(({ p, v }: any) => {
+          {rows.map(({ p, v }) => {
             const card = p.niches?.card ?? {};
             return (
               <article key={p.id} className="idea">
@@ -187,5 +204,6 @@ export function Ideas() {
         </div>
       )}
     </Section>
+    </FilterLayout>
   );
 }
