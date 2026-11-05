@@ -1,0 +1,5 @@
+# Minimal Supabase CLI config, used when the Vercel build deploys the backend.
+project_id = "wellness-niche-intel"
+
+[functions.api]
+verify_jwt = false

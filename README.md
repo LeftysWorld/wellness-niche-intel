@@ -97,9 +97,12 @@ After any migration, run `scripts/sql_tests.sql` against the project (it rolls b
 New migrations: apply them, then save the file under the version the live history shows (`list_migrations` / `supabase migration list`) so the repo and the database never drift.
 
 ## Deploying
-CI (`.github/workflows/ci.yml`) runs the checks and, on `main`, pushes migrations, deploys the `api` function and smoke-tests it. It needs two repository secrets: `SUPABASE_ACCESS_TOKEN` and `SUPABASE_DB_PASSWORD`. **GitHub Actions is currently refused for this account because of a billing lock; fix that in GitHub → Settings → Billing.** Until then, deploy by hand with `supabase functions deploy api --no-verify-jwt`; the Activity page warns when the live backend is behind GitHub `main`.
+Vercel is the CI. Every push to `main` triggers a Vercel build that:
+1. runs all code tests and type-checks the edge functions (a failure stops the deploy),
+2. builds and type-checks the web app,
+3. on production builds only, deploys the backend from the same commit: `supabase db push`, then the `api` function, then a smoke test (`web/scripts/deploy-backend.mjs`).
 
-Regenerate the seed after editing niche cards or the starting ledger: `python3 scripts/build_seed.py`.
+Step 3 needs two Vercel environment variables, Production only, marked Sensitive: `SUPABASE_ACCESS_TOKEN` (a Supabase personal access token) and `SUPABASE_DB_PASSWORD`. Without them the backend step is skipped and the app still deploys. They have no `VITE_` prefix, so they are never bundled into the browser. The Activity page warns if the live backend is behind GitHub `main`.
 
 ## Changing the defaults
 - Your goals, capital, regions and exclusions: `parameter_profiles` ("Robby — default").

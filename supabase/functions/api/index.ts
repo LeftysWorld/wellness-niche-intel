@@ -26,8 +26,8 @@ const routes: Record<string, (body: Record<string, unknown>) => Promise<unknown>
   verifier,
 };
 
-// When deployed from a pinned GitHub commit, the commit is part of this module's URL.
-const VERSION = import.meta.url.match(/\/([0-9a-f]{40})\//)?.[1] ?? 'local';
+// The commit the backend runs: set by the Vercel deploy, or part of the URL when deployed pinned.
+const VERSION = import.meta.url.match(/\/([0-9a-f]{40})\//)?.[1] ?? Deno.env.get('BACKEND_VERSION') ?? 'local';
 
 Deno.serve(
   handler(async (body, req) => {
