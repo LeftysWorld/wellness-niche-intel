@@ -103,7 +103,7 @@ export async function run(body: Record<string, unknown>) {
       }),
     );
     const pick = ages.sort((a, b) => a.newest - b.newest).slice(0, limit);
-    return withRun('monthly_refresh', { tokenBudget: budgets.location_scout_tokens, searchBudget: 12 * limit, input: body }, async (run) => {
+    return withRun('monthly_refresh', { tokenBudget: budgets.location_scout_tokens, searchBudget: 20 * limit, input: body }, async (run) => {
       const out: unknown[] = [];
       for (const l of pick) out.push(await scoutLocation(run, l.id));
       return { refreshed: out };

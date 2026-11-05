@@ -10,7 +10,7 @@ export async function run(body: Record<string, unknown>) {
     : must(await db().from('locations').select('id').eq('active', true), 'locations').map((l) => l.id);
   return withRun(
     'location_scout',
-    { tokenBudget: budgets.location_scout_tokens, searchBudget: 12 * ids.length, subjectId: body.location_id as string | undefined, input: body },
+    { tokenBudget: budgets.location_scout_tokens, searchBudget: 20 * ids.length, subjectId: body.location_id as string | undefined, input: body },
     async (run) => {
       const out: unknown[] = [];
       for (const id of ids) out.push(await scoutLocation(run, id, { keys: body.keys as string[] | undefined, force: Boolean(body.force) }));

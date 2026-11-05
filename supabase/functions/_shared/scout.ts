@@ -29,7 +29,9 @@ export async function scoutLocation(run: Run, locationId: string, opts: { keys?:
   const skipped: { key: string; reason: string; note: string }[] = [];
   for (const key of keys) {
     const q = queryFor(key, location);
-    const hits = await search(run, q, 6);
+    // Two searches per value: the local-language query and an English one.
+    const seen = new Set<string>();
+    const hits = [...(await search(run, q, 6)), ...(await search(run, `${KEY_GUIDE[key] ?? key} ${location.name}`, 5))].filter((h) => !seen.has(h.url) && seen.add(h.url));
     if (!hits.length) {
       skipped.push({ key, reason: 'no search results', note: q });
       continue;
@@ -38,7 +40,7 @@ export async function scoutLocation(run: Run, locationId: string, opts: { keys?:
     const out = await ask<Out>({
       run,
       model: models.extraction,
-      system: 'You extract one numeric fact from search results with its source. Use numbers stated in the results; you may convert currency and units (e.g. hectares to acres, yearly to monthly) and say so in the note. Give a range across the listings you see. If the results do not support a value, set found=false.',
+      system: 'You extract one numeric fact from search results with its source. Use numbers stated in the results; you may convert currency and units (e.g. hectares to acres, yearly to monthly) and say so in the note. Give a range across the listings you see. The description of the value is a target, not a filter: if the closest evidence differs (fewer bedrooms, smaller or larger lots, a nearby town), still report it, set confidence to low, and say in the note how it differs and which way it likely biases the number. Set found=false only when nothing in the results is about this value in or near this place.',
       prompt: [
         `Location: ${location.name} (${location.country_code}).`,
         `Value wanted (${key}): ${KEY_GUIDE[key] ?? key}.`,
