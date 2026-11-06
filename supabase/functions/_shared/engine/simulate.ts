@@ -133,8 +133,9 @@ export function fund(model: BusinessModel, sc: Scenario): Funding {
   let equity = total;
   let loan = 0;
   if (f.kind === 'loan') {
-    // The owner injects the lender's minimum equity; everything else is borrowed.
-    equity = total * (f.minEquityPct ?? 0.25);
+    // The owner injects the lender's minimum equity; everything else is borrowed,
+    // up to the most the lender will lend.
+    equity = Math.max(total * (f.minEquityPct ?? 0.25), total - (f.maxLoan ?? Infinity));
     loan = total - equity;
   }
   const monthlyPayment = loan > 0 ? amortizedPayment(loan, ratePct, termMonths) : 0;
@@ -142,7 +143,7 @@ export function fund(model: BusinessModel, sc: Scenario): Funding {
   const fundable = f.ownerCash >= equity;
   const note = fundable
     ? f.kind === 'loan'
-      ? `Owner injects ${pct(f.minEquityPct ?? 0.25)} of project cost; the rest is borrowed.`
+      ? `Owner injects ${pct(equity / total)} of project cost; the rest is borrowed${f.lender ? ` from ${f.lender}` : ''}.`
       : 'Owner cash covers the project cost.'
     : `Short by about $${Math.round(equity - f.ownerCash).toLocaleString('en-US')} of owner cash.`;
   return { base, contingency, workingCapital, total, equity, loan, monthlyPayment, ratePct, termMonths, fundable, note };

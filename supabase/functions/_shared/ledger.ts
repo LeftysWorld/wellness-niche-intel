@@ -77,6 +77,7 @@ export const REQUIRED_LOCATION_KEYS = [
   'lease.finca_monthly_usd',
   'lease.commercial_monthly_usd',
   'lease.estate_monthly_usd',
+  'lease.land_monthly_usd_per_acre',
   'tax.income_effective_pct',
   'labor.monthly_wage_usd',
   'tax.revenue_pct',
@@ -89,6 +90,7 @@ export const REQUIRED_LOCATION_KEYS = [
 
 export const KEY_GUIDE: Record<string, string> = {
   'land.price_per_acre_usd': 'Asking price per acre (USD) for rural land of 1-10 acres suitable for a small retreat',
+  'lease.land_monthly_usd_per_acre': 'Monthly rent per acre (USD) on a long-term lease of rural land with no buildings (a ground or land lease, e.g. for farming, cabins or glamping); not a sale price',
   'lease.finca_monthly_usd': 'Monthly rent (USD) on a long-term lease (12+ months) for a furnished rural house or finca with 4+ bedrooms and some land; not nightly or weekly vacation rates',
   'lease.commercial_monthly_usd': 'Monthly rent (USD) on a long-term lease for a rural or edge-of-town property where a public-facing business (day visitors, parking) is allowed; not nightly or event rates',
   'lease.estate_monthly_usd': 'Monthly rent (USD) on a long-term lease (12+ months) for a large rural estate (20+ acres) with several buildings; not nightly or weekly vacation rates',

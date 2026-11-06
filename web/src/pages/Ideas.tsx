@@ -55,6 +55,8 @@ function spread<T>(list: T[], nicheOf: (r: T) => string, placeOf: (r: T) => stri
   return out;
 }
 
+const TENURE: Record<string, string> = { own: 'Buy land', lease: 'Lease a property', ground: 'Rent land, build my own' };
+
 const ACTIVE = ['Screened', 'Queued for full analysis', 'Analysed', 'Analysed and checked'];
 
 const EVIDENCE = (e: any) => {
@@ -90,12 +92,13 @@ export function Ideas() {
   }
 
   const target = Number(data?.params?.target_monthly_profit_usd ?? 5000);
-  const afterTax = (data?.params?.target_basis ?? 'after_tax') !== 'pre_tax';
+  const basis = data?.params?.target_basis ?? 'after_tax';
+  const afterTax = basis !== 'pre_tax';
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const view = (p: any) => {
     const r = p.analysis_results?.result;
     const sc = p.scores ?? {};
-    const fig = (s: any) => (s ? (afterTax ? s.takeHome : s.profit) : null);
+    const fig = (s: any) => (s ? (basis === 'with_housing' ? s.takeHomeWithHousing ?? s.takeHome : afterTax ? s.takeHome : s.profit) : null);
     return {
       y1: fig(r?.year1)?.p50 ?? sc.target_year_figure ?? null,
       y1Range: fig(r?.year1) ?? sc.target_year_range ?? null,
@@ -152,7 +155,7 @@ export function Ideas() {
       { key: 'meets', label: 'Meets my target', type: 'bool', quick: true, get: (r) => (r.v.y1 ?? -Infinity) >= target },
       { key: 'fundable', label: 'Fundable', type: 'bool', quick: true, get: (r) => r.v.fundable },
       { key: 'solo', label: 'Run it alone', type: 'bool', quick: true, get: (r) => (r.v.help ?? 0) <= 0.5 },
-      { key: 'tenure', label: 'Property', type: 'enum', group: 'Idea', get: (r) => (r.v.tenure ? (r.v.tenure === 'own' ? 'Buy land' : 'Lease') : null) },
+      { key: 'tenure', label: 'Property', type: 'enum', group: 'Idea', get: (r) => (r.v.tenure ? TENURE[r.v.tenure] ?? r.v.tenure : null) },
       { key: 'evidence', label: 'Data quality', type: 'enum', group: 'Idea', get: (r) => EVIDENCE(r.v.evidence), order: ['Mostly sourced', 'Partly guessed', 'Mostly guessed', 'Not modelled'] },
       { key: 'site', label: 'Site check', type: 'enum', group: 'Idea', get: (r) => (r.v.site?.verdict === 'unknown' ? 'Needs checking' : r.v.site?.verdict === 'fail' ? 'Fails' : r.v.site ? 'Passes' : 'Not checked') },
       { key: 'y1', label: 'Year 1 /mo', type: 'number', group: 'Money', get: (r) => r.v.y1, fmt: usd },
@@ -227,7 +230,7 @@ export function Ideas() {
                   </div>
                 </div>
                 <p className="small">
-                  {v.tenure === 'own' ? 'Buy land' : 'Lease a property'} · {v.months ?? '?'} months to open ·{' '}
+                  {TENURE[v.tenure] ?? 'Lease a property'} · {v.months ?? '?'} months to open ·{' '}
                   {v.help > 0.5 ? `you + ${Math.round(v.help)} h/month paid help` : 'you run it alone'}
                 </p>
                 {!v.fundable && v.fundingNote && <p className="small err">{v.fundingNote}</p>}

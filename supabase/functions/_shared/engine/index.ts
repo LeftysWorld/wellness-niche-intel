@@ -32,6 +32,7 @@ const yearAvg = (xs: number[], year: number) => avg(xs.slice((year - 1) * 12, ye
 
 export function analyze(model: BusinessModel, opts: AnalyzeOptions = {}): AnalysisResult {
   const simulations = opts.simulations ?? 2000;
+  const housing = Math.max(0, model.ownerHousingSavedMonthly ?? 0);
   const seed = opts.seed ?? 42;
   const rng = createRng(seed);
 
@@ -68,7 +69,8 @@ export function analyze(model: BusinessModel, opts: AnalyzeOptions = {}): Analys
     cashLow.push(low);
     const needed = path.funding.equity + Math.max(0, -low);
     cashNeeded.push(needed);
-    if (path.funding.monthlyPayment > 0) dscr.push(avg(path.operatingProfit.slice(0, 24)) / path.funding.monthlyPayment);
+    // Living on site removes the owner's housing cost, which lenders count in global cash flow.
+    if (path.funding.monthlyPayment > 0) dscr.push((avg(path.operatingProfit.slice(0, 24)) + housing) / path.funding.monthlyPayment);
     preMonths.push(path.preOpeningMonths);
     preCost.push(path.preOpeningCost.reduce((a, b) => a + b, 0));
     hours.push(Math.max(...path.ownerHours));
@@ -83,12 +85,16 @@ export function analyze(model: BusinessModel, opts: AnalyzeOptions = {}): Analys
     ret5.push(needed > 0 ? (kept + y5.netProceeds - needed) / needed : 0);
   }
 
-  const snap = (y: Year): MonthSnapshot => ({
-    revenue: roundP(percentiles(y.r)),
-    costs: roundP(percentiles(y.c)),
-    profit: roundP(percentiles(y.p)),
-    takeHome: roundP(percentiles(y.t)),
-  });
+  const snap = (y: Year): MonthSnapshot => {
+    const t = percentiles(y.t);
+    return {
+      revenue: roundP(percentiles(y.r)),
+      costs: roundP(percentiles(y.c)),
+      profit: roundP(percentiles(y.p)),
+      takeHome: roundP(t),
+      takeHomeWithHousing: roundP({ p10: t.p10 + housing, p50: t.p50 + housing, p90: t.p90 + housing }),
+    };
+  };
 
   const modePath = simulate(model, modeScenario(model));
   const f = modePath.funding;
@@ -108,8 +114,8 @@ export function analyze(model: BusinessModel, opts: AnalyzeOptions = {}): Analys
   const lenderNote = !isLoan
     ? 'No loan.'
     : bankable
-      ? `Profit covers the loan payment ${dscrP50!.toFixed(2)}x in years 1-2; lenders look for ${required}x.`
-      : `A lender is unlikely to approve: profit covers the payment only ${dscrP50!.toFixed(2)}x in years 1-2 (lenders look for ${required}x).`;
+      ? `Profit${housing ? ' plus the housing you save by living on site' : ''} covers the loan payment ${dscrP50!.toFixed(2)}x in years 1-2; lenders look for ${required}x.`
+      : `A lender is unlikely to approve: profit${housing ? ' plus housing saved' : ''} covers the payment only ${dscrP50!.toFixed(2)}x in years 1-2 (lenders look for ${required}x).`;
 
   const ownerCash = model.financing.ownerCash;
   const cashOk = ownerCash >= need.p50;

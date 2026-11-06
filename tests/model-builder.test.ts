@@ -119,7 +119,7 @@ test('solo owners pay for opening hours beyond their limit by the hour', () => {
 test('a loan includes a build period with interest and a lender test', () => {
   const us = mergeLedger([{ scope: 'country', rows: [row('labor.monthly_wage_usd', 2800), row('finance.rate_pct', 8.5), row('finance.min_equity_pct', 0.2), row('land.price_per_acre_usd', 16000)] }]);
   const out = buildModel({ niche, template: data.template, location: { slug: 'x', name: 'x', country_code: 'US' }, ledger: us, profile: { ...profile, financing_allowed: ['sba'] }, tenure: 'own' });
-  assert.equal(out.model.financing.minEquityPct, 0.25, 'start-ups need at least 25% equity');
+  assert.equal(out.model.financing.minEquityPct, 0.2, 'start-ups put down the typical 20% (SBA floor 10%)');
   const r = analyze(out.model, { simulations: 200, sensitivity: false });
   assert.ok(r.startup.preOpeningMonthsP50 >= 6);
   assert.equal(r.lender.applies, true);

@@ -55,8 +55,8 @@ export interface NicheModelSpec {
   ownerFixedHours: number;
   /** Hours per month someone must be on site because the business is open. */
   openHoursPerMonth?: number;
-  /** Months from start to opening, by tenure. */
-  buildMonths?: { own?: Tri; lease?: Tri };
+  /** Months from start to opening, by tenure (ground uses own: the structures still get built). */
+  buildMonths?: { own?: Tri; lease?: Tri; ground?: Tri };
   /** house: a rentable home with rooms; commercial: public-facing use; estate: large acreage with buildings. */
   siteType?: SiteType;
   variablePct: Tri;
@@ -84,7 +84,8 @@ export interface CostTemplate {
 
 type Scale = 'build' | 'equipment' | 'price' | 'none';
 type Applies = 'own' | 'lease' | 'both';
-export type Tenure = 'own' | 'lease';
+/** own = buy land and build; lease = rent an existing property and convert it; ground = rent land and put up your own structures. */
+export type Tenure = 'own' | 'lease' | 'ground';
 
 export interface ProfileParams {
   capital_usd: { min: number; max: number };
@@ -167,13 +168,14 @@ const LEASE_BY_SITE: Record<SiteType, { key: string; vsHouse: number }> = {
 const DEFAULT_BUILD_MONTHS: Record<Tenure, Tri> = {
   own: { low: 6, mode: 10, high: 18 },
   lease: { low: 2, mode: 3, high: 6 },
+  // Structures still get built and permitted, but there is no land purchase.
+  ground: { low: 5, mode: 8, high: 14 },
 };
 
 /** Monthly hours in a full-time job, for turning a monthly wage into an hourly one. */
 const HOURS_PER_FTE = 173;
 
 /** Lenders want more equity from a business with no operating history. */
-const STARTUP_MIN_EQUITY = 0.25;
 
 function parseCurve(v: LedgerValue | undefined): number[] | undefined {
   if (!v?.value_text) return undefined;
@@ -281,15 +283,27 @@ export function buildModel(input: BuildInput): BuildOutput {
   const startup: CostLine[] = [];
   let landValue = 0;
   let buildingValue = 0;
-  const lease = tenure === 'lease' ? siteRent : point(0);
+  // Building your own structures on rented land uses the same build items as owning.
+  const builds = tenure === 'own' || tenure === 'ground';
+  const appliesTo = (a: Applies) => a === 'both' || a === (builds ? 'own' : 'lease');
+  // Ground rent: scouted rent per acre, else a typical yield on the land's value.
+  const groundRent = (): Tri => {
+    if (has('lease.land_monthly_usd_per_acre')) return scaleTri(read('lease.land_monthly_usd_per_acre', point(50)), template.land_acres);
+    missing.push('lease.land_monthly_usd_per_acre');
+    const perAcre = read('land.price_per_acre_usd', point(20000));
+    const yieldPct = has('lease.ground_rent_yield_pct') ? read('lease.ground_rent_yield_pct', point(0.06)) : { low: 0.04, mode: 0.06, high: 0.08 };
+    return scaleTri(scaleTri(perAcre, normalizeTri(yieldPct).mode / 12), template.land_acres);
+  };
+  const lease = tenure === 'lease' ? siteRent : tenure === 'ground' ? groundRent() : point(0);
   if (tenure === 'own') {
     const perAcre = read('land.price_per_acre_usd', point(20000));
     const land = scaleTri(perAcre, template.land_acres);
     landValue = normalizeTri(land).mode;
     startup.push({ key: 'land', label: `Land (${template.land_acres} acres)`, amount: land });
   }
+  if (tenure === 'ground') startup.push({ key: 'ground_deposit', label: 'Land lease deposit (2 months)', amount: scaleTri(lease, 2) });
   for (const item of template.items) {
-    if (item.applies !== 'both' && item.applies !== tenure) continue;
+    if (!appliesTo(item.applies)) continue;
     if (item.leaseMonths) {
       startup.push({ key: item.key, label: item.label, amount: scaleTri(lease, item.leaseMonths) });
       continue;
@@ -303,10 +317,11 @@ export function buildModel(input: BuildInput): BuildOutput {
 
   // Monthly costs.
   const fixed: MonthlyCost[] = spec.fixed
-    .filter((f) => f.applies === 'both' || f.applies === tenure)
+    .filter((f) => appliesTo(f.applies))
     .filter((f) => !RENT_LINE.test(`${f.key} ${f.label}`))
     .map((f) => ({ key: f.key, label: f.label, amount: scaled(f.usd, f.scale) }));
   if (tenure === 'lease') fixed.unshift({ key: 'lease', label: 'Lease', amount: lease });
+  if (tenure === 'ground') fixed.unshift({ key: 'ground_rent', label: `Land rent (${template.land_acres} acres)`, amount: lease });
   // A solo owner does the work; any hours beyond their limit are paid for by the hour.
   // A team-run business carries the niche's own staff lines instead.
   const solo = String(profile.operator_model ?? 'solo') === 'solo';
@@ -321,29 +336,46 @@ export function buildModel(input: BuildInput): BuildOutput {
   if (spec.openHoursPerMonth === undefined) missing.push('niche.open_hours');
 
   // Financing.
-  const loanAllowed = profile.financing_allowed.some((f) => ['sba', 'usda', 'local_bank'].includes(f));
+  const allowed = profile.financing_allowed;
+  const bankLoan = allowed.some((f) => ['sba', 'usda', 'local_bank'].includes(f));
   const isUs = location.country_code === 'US';
   const ownerCash = profile.capital_usd.max;
-  let financing: BusinessModel['financing'] = { kind: tenure === 'lease' ? 'lease' : 'cash', ownerCash };
-  if (tenure === 'own' && loanAllowed && isUs && input.financingOverride !== 'cash') {
-    financing = {
-      kind: 'loan',
-      ownerCash,
-      minEquityPct: Math.max(STARTUP_MIN_EQUITY, readMode('finance.min_equity_pct', STARTUP_MIN_EQUITY)),
-      ratePct: readMode('finance.rate_pct', 8.5),
-      termYears: 25,
-      minDscr: 1.25,
-    };
+  let financing: BusinessModel['financing'] = { kind: tenure === 'own' ? 'cash' : 'lease', ownerCash };
+  if (input.financingOverride !== 'cash') {
+    if (isUs && bankLoan) {
+      // Lenders ask start-ups for 10-30% down (SBA's floor is 10%); the ledger holds the typical figure.
+      const minEquity = Math.max(has('finance.sba_min_equity_pct') ? readMode('finance.sba_min_equity_pct', 0.1) : 0.1, readMode('finance.min_equity_pct', 0.2));
+      financing =
+        tenure === 'own'
+          ? { kind: 'loan', ownerCash, minEquityPct: minEquity, ratePct: readMode('finance.rate_pct', 8.5), termYears: 25, minDscr: 1.25, lender: 'an SBA or bank loan' }
+          : // Fit-out, structures and working capital on leased property: SBA 7(a), up to 10 years.
+            { kind: 'loan', ownerCash, minEquityPct: minEquity, ratePct: readMode('finance.rate_pct', 8.5) + 0.5, termYears: 10, minDscr: 1.25, lender: 'an SBA 7(a) loan' };
+    } else if (!isUs && tenure === 'own' && allowed.includes('seller') && landValue > 0) {
+      // Seller financing (common for land in Latin America) covers part of the land only.
+      const down = readMode('finance.seller_down_pct', 0.4);
+      financing = {
+        kind: 'loan',
+        ownerCash,
+        minEquityPct: 0,
+        maxLoan: landValue * (1 - down),
+        ratePct: readMode('finance.seller_rate_pct', 8),
+        termYears: readMode('finance.seller_term_years', 7),
+        minDscr: 0,
+        lender: 'the land seller',
+      };
+    }
   }
 
   const exit = spec.exit;
   const startMonth = input.startMonth ?? new Date().getMonth() + 1;
   const model: BusinessModel = {
-    label: `${niche.name} · ${tenure === 'own' ? 'owned' : 'leased'} · ${location.name}`,
+    label: `${niche.name} · ${tenure === 'own' ? 'owned' : tenure === 'ground' ? 'own structures on rented land' : 'leased'} · ${location.name}`,
     startupCosts: startup,
-    contingencyPct: tenure === 'own' ? { low: 0.1, mode: 0.15, high: 0.25 } : { low: 0.1, mode: 0.12, high: 0.2 },
+    contingencyPct: builds ? { low: 0.1, mode: 0.15, high: 0.25 } : { low: 0.1, mode: 0.12, high: 0.2 },
     workingCapitalMonths: 3,
-    preOpening: { months: spec.buildMonths?.[tenure] ?? DEFAULT_BUILD_MONTHS[tenure], fixedShare: 0.3 },
+    preOpening: { months: spec.buildMonths?.[tenure] ?? (tenure === 'ground' ? spec.buildMonths?.own : undefined) ?? DEFAULT_BUILD_MONTHS[tenure], fixedShare: 0.3 },
+    // Living on site: the housing the owner no longer pays elsewhere.
+    ownerHousingSavedMonthly: profile.live_on_site && Number(profile.housing_cost_usd) > 0 ? Number(profile.housing_cost_usd) : undefined,
     startCalendarMonth: startMonth,
     financing,
     streams,
@@ -369,7 +401,7 @@ export function buildModel(input: BuildInput): BuildOutput {
       sellingCostPct: 0.08,
       ownerDependenceDiscount: 0.15,
       countryDiscount: readMode('exit.country_discount', 0.1),
-      marketRentMonthly: normalizeTri(siteRent).mode,
+      marketRentMonthly: normalizeTri(tenure === 'ground' ? lease : siteRent).mode,
     },
     capacity: {
       ownerHoursPerMonth: profile.owner_hours_per_month ?? 220,

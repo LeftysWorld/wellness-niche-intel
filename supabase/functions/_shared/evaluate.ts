@@ -24,9 +24,10 @@ export function evaluateBuilt(input: {
 }): Candidate[] {
   const { profile } = input;
   const pref = profile.own_or_lease ?? 'either';
-  const tenures: Tenure[] = pref === 'own' ? ['own'] : pref === 'lease' ? ['lease'] : ['lease', 'own'];
+  // "either" compares all three: lease a property, rent land and build, or buy land and build.
+  const tenures: Tenure[] = pref === 'own' ? ['own'] : pref === 'lease' ? ['lease'] : pref === 'ground' ? ['ground'] : ['lease', 'ground', 'own'];
   const targetYear = Number(profile.target_year ?? 1);
-  const basis: TargetBasis = profile.target_basis === 'pre_tax' ? 'pre_tax' : 'after_tax';
+  const basis: TargetBasis = profile.target_basis === 'pre_tax' || profile.target_basis === 'with_housing' ? profile.target_basis : 'after_tax';
   const build = (tenure: Tenure, financingOverride?: 'cash'): Candidate => {
     const b = buildModel({ niche: input.niche, template: input.template, location: input.location, ledger: input.ledger, profile, tenure, financingOverride });
     if (input.pairingId) b.model.pairingId = input.pairingId;

@@ -253,6 +253,8 @@ function queryFor(key: string, l: LocationRow): string {
       return es ? `local comercial en arriendo ${place} rural parqueadero` : `commercial property for lease ${place} rural retail`;
     case 'lease.estate_monthly_usd':
       return es ? `finca grande en arriendo ${place} hectáreas` : `estate for rent ${place} acres farm`;
+    case 'lease.land_monthly_usd_per_acre':
+      return es ? `lote en arriendo ${place} por hectárea mensual` : `land for lease ${place} per acre rent`;
     case 'tax.income_effective_pct':
       return es ? `tarifa régimen simple de tributación 2026 servicios` : `self-employment tax and income tax rate small business ${place}`;
     case 'labor.monthly_wage_usd':

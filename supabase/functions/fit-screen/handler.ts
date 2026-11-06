@@ -16,7 +16,7 @@ export async function run(body: Record<string, unknown>) {
     : await defaultProfile();
   const th = await getSetting<Thresholds>('thresholds');
   const params = profile.params;
-  const basis: TargetBasis = params.target_basis === 'pre_tax' ? 'pre_tax' : 'after_tax';
+  const basis: TargetBasis = params.target_basis === 'pre_tax' || params.target_basis === 'with_housing' ? params.target_basis : 'after_tax';
   const targetYear = Number(params.target_year ?? 1);
   const target = Number(params.target_monthly_profit_usd ?? 5000);
 
@@ -101,7 +101,7 @@ export async function run(body: Record<string, unknown>) {
               cash_needed_p50: round2(r.startup.cashNeeded.p50),
               pre_opening_months: r.startup.preOpeningMonthsP50,
               target_year_figure: round2(targetFigure(r, targetYear, basis)),
-              target_year_range: basis === 'pre_tax' ? y.profit : y.takeHome,
+              target_year_range: basis === 'pre_tax' ? y.profit : basis === 'with_housing' ? y.takeHomeWithHousing : y.takeHome,
               year3_figure: round2(targetFigure(r, 3, basis)),
               needs_help: r.capacity.needsHelp,
               paid_help_hours: r.capacity.paidHelpHoursP50,

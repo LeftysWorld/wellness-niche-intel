@@ -27,8 +27,11 @@ const ITEMS: Item[] = [
   { section: 'My goal', label: 'By year after opening', hint: 'year 1 year 3 goal' },
   { section: 'My goal', label: 'Compare the target with', hint: 'tax after before income' },
   { section: 'Money and work', label: 'Cash I can put in (USD)', hint: 'capital savings money' },
-  { section: 'Money and work', label: 'Own or lease', hint: 'buy rent property land' },
-  { section: 'Money and work', label: 'Borrow to buy land', hint: 'loan bank sba usda financing' },
+  { section: 'Money and work', label: 'Own or lease', hint: 'buy rent property land ground lease build structures' },
+  { section: 'Money and work', label: 'Borrow to buy land', hint: 'loan bank sba usda financing usa lease 7a' },
+  { section: 'Money and work', label: 'Seller financing abroad', hint: 'loan seller owner financing colombia costa rica el salvador land' },
+  { section: 'Money and work', label: 'Live on site', hint: 'home house residence living' },
+  { section: 'Money and work', label: 'My housing cost today (USD/month)', hint: 'rent mortgage housing living' },
   { section: 'Money and work', label: "Hours a month I'll work on site", hint: 'workload time owner' },
   { section: 'Money and work', label: 'Who runs it', hint: 'staff team solo help' },
   ...Object.values(WEIGHT_LABELS).map((label) => ({ section: 'How ideas are scored', label, hint: 'weight score ranking' })),
@@ -109,6 +112,7 @@ export function Settings() {
             Compare the target with
             <select value={p.target_basis ?? 'after_tax'} onChange={(e) => set('target_basis', e.target.value)}>
               <option value="after_tax">Take-home after income tax</option>
+              <option value="with_housing">Take-home plus the housing I save living on site</option>
               <option value="pre_tax">Profit before income tax</option>
             </select>
           </label>
@@ -127,17 +131,18 @@ export function Settings() {
           )}
           {vis('Own or lease') && (
           <label>
-            Own or lease
+            Property
             <select value={p.own_or_lease ?? 'either'} onChange={(e) => set('own_or_lease', e.target.value)}>
-              <option value="either">Either</option>
-              <option value="lease">Lease only</option>
-              <option value="own">Buy only</option>
+              <option value="either">Compare all three</option>
+              <option value="lease">Lease an existing property</option>
+              <option value="ground">Rent land and build my own structures</option>
+              <option value="own">Buy land and build</option>
             </select>
           </label>
           )}
           {vis('Borrow to buy land') && (
           <label>
-            Borrow to buy land
+            Borrow in the USA
             <select
               value={loans ? 'yes' : 'no'}
               onChange={(e) => {
@@ -145,9 +150,42 @@ export function Settings() {
                 set('financing_allowed', e.target.value === 'yes' ? [...rest, 'sba', 'usda'] : rest);
               }}
             >
-              <option value="yes">Yes, if a lender would approve</option>
+              <option value="yes">Yes: SBA or bank loan to buy, or SBA 7(a) for a lease, if a lender would approve</option>
               <option value="no">No, cash only</option>
             </select>
+          </label>
+          )}
+          {vis('Seller financing abroad') && (
+          <label>
+            Seller financing abroad
+            <select
+              value={(p.financing_allowed ?? []).includes('seller') ? 'yes' : 'no'}
+              onChange={(e) => {
+                const rest = (p.financing_allowed ?? []).filter((f: string) => f !== 'seller');
+                set('financing_allowed', e.target.value === 'yes' ? [...rest, 'seller'] : rest);
+              }}
+            >
+              <option value="no">No, cash only outside the USA</option>
+              <option value="yes">Assume the land seller finances part (about 40% down, 7 years, 8%)</option>
+            </select>
+          </label>
+          )}
+        </div>
+        <div className="row">
+          {vis('Live on site') && (
+          <label>
+            Live on site
+            <select value={p.live_on_site ? 'yes' : 'no'} onChange={(e) => set('live_on_site', e.target.value === 'yes')}>
+              <option value="yes">Yes, I'll live there</option>
+              <option value="no">No</option>
+            </select>
+          </label>
+          )}
+          {vis('My housing cost today (USD/month)') && (
+          <label>
+            My housing cost today (USD/month)
+            <input type="number" min={0} value={p.housing_cost_usd ?? 0} onChange={(e) => set('housing_cost_usd', Number(e.target.value))} />
+            <small className="muted">Rent or mortgage you'd stop paying. Lenders count it when you live on site; it can also count toward your target (above).</small>
           </label>
           )}
         </div>

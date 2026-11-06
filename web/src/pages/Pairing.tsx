@@ -104,6 +104,10 @@ const LABEL: Record<string, string> = {
   'finance.rate_pct': 'Loan interest rate',
   'finance.min_equity_pct': 'Minimum down payment',
   'land.appreciation_pct': 'Land value growth per year',
+  'lease.land_monthly_usd_per_acre': 'Land rent per acre per month',
+  'finance.seller_down_pct': 'Seller financing: down payment',
+  'finance.seller_rate_pct': 'Seller financing: interest',
+  'finance.seller_term_years': 'Seller financing: years',
 };
 const pct = (x: number) => `${Math.round(x * 100)}%`;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -168,7 +172,7 @@ export function PairingPage({ id }: { id: string }) {
       >
         <p className="small">
           <span className={`pill ${p.status}`}>{p.status === 'candidate' ? 'Screened' : p.status}</span> · fit score {p.score_total ?? '—'} ·{' '}
-          {r?.tenure === 'own' ? 'buy land' : r?.tenure === 'lease' ? 'lease a property' : ''}
+          {r?.tenure === 'own' ? 'buy land' : r?.tenure === 'ground' ? 'rent land, build my own' : r?.tenure === 'lease' ? 'lease a property' : ''}
           {ar && (
             <>
               {' '}
@@ -210,6 +214,12 @@ export function PairingPage({ id }: { id: string }) {
                 <b className={r.year1.takeHome.p50 >= target ? 'ok' : 'err'}>{usd(r.year1.takeHome.p50)}</b>
                 <small>
                   {usd(r.year1.takeHome.p10)} to {usd(r.year1.takeHome.p90)}
+                  {r.year1.takeHomeWithHousing && r.year1.takeHomeWithHousing.p50 !== r.year1.takeHome.p50 && (
+                    <>
+                      <br />
+                      {usd(r.year1.takeHomeWithHousing.p50)} counting the housing you save living on site
+                    </>
+                  )}
                 </small>
               </div>
               <div>
@@ -300,7 +310,7 @@ export function PairingPage({ id }: { id: string }) {
       </Section>
 
       {candidates && candidates.length > 1 && (
-        <Section title="Lease or buy?">
+        <Section title="Lease, rent land or buy?">
           <table>
             <thead>
               <tr>
@@ -318,8 +328,8 @@ export function PairingPage({ id }: { id: string }) {
               {candidates.map((c, i) => (
                 <tr key={c.tenure}>
                   <td>
-                    {c.tenure === 'own' ? 'Buy land and build' : 'Lease a property'}
-                    {c.build.model.financing.kind === 'cash' && c.tenure === 'own' ? ' (cash)' : ''} {i === 0 && <span className="pill">better</span>}
+                    {c.tenure === 'own' ? 'Buy land and build' : c.tenure === 'ground' ? 'Rent land, build my own' : 'Lease a property'}
+                    {c.build.model.financing.kind === 'cash' ? ' (cash)' : c.build.model.financing.lender ? ` (${c.build.model.financing.lender})` : ''} {i === 0 && <span className="pill">better</span>}
                   </td>
                   <td>{usd(c.result.startup.cashNeeded.p50)}</td>
                   <td>{usd(c.result.startup.total.p50)}</td>

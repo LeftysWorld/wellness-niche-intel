@@ -39,7 +39,8 @@ export const DEFAULT_WEIGHTS: Weights = {
   evidence: 0.05,
 };
 
-export type TargetBasis = 'after_tax' | 'pre_tax';
+/** after_tax = take-home; pre_tax = profit; with_housing = take-home plus the housing living on site saves. */
+export type TargetBasis = 'after_tax' | 'pre_tax' | 'with_housing';
 
 export function snapshotFor(r: AnalysisResult, year: number) {
   return year <= 1 ? r.year1 : year <= 3 ? r.year3 : r.year5;
@@ -48,7 +49,9 @@ export function snapshotFor(r: AnalysisResult, year: number) {
 /** The monthly figure compared to the owner's target: take-home (after tax) or profit (before tax). */
 export function targetFigure(r: AnalysisResult, year: number, basis: TargetBasis): number {
   const s = snapshotFor(r, year);
-  return basis === 'pre_tax' ? s.profit.p50 : s.takeHome.p50;
+  if (basis === 'pre_tax') return s.profit.p50;
+  if (basis === 'with_housing') return (s.takeHomeWithHousing ?? s.takeHome).p50;
+  return s.takeHome.p50;
 }
 
 const VISA: Record<string, number> = { citizen: 10, spouse_visa_eligible: 9, digital_nomad: 6, needs_investor_residency: 5, unclear: 3, not_allowed: 0 };

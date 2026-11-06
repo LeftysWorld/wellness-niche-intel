@@ -38,6 +38,10 @@ export interface Financing {
   termYears?: number;
   /** Debt-service coverage a lender requires: operating profit / loan payment. Defaults to 1.25. */
   minDscr?: number;
+  /** Most the lender will lend (e.g. seller financing covers only the land). */
+  maxLoan?: number;
+  /** Who lends, for the notes (e.g. "SBA 7(a)", "the land seller"). */
+  lender?: string;
 }
 
 export interface RevenueStream extends Provenance {
@@ -154,6 +158,8 @@ export interface BusinessModel {
   startCalendarMonth?: number;
   /** Months to simulate. Defaults to 60. */
   horizonMonths?: number;
+  /** Living on site: the owner's current housing cost that they would no longer pay (USD/month). */
+  ownerHousingSavedMonthly?: number;
 }
 
 export interface Percentiles {
@@ -170,6 +176,8 @@ export interface MonthSnapshot {
   profit: Percentiles;
   /** After loan payments and estimated income tax: what the owner keeps. */
   takeHome: Percentiles;
+  /** Take-home plus the housing cost living on site saves (equals takeHome when not living on site). */
+  takeHomeWithHousing: Percentiles;
 }
 
 export interface StartupResult {
