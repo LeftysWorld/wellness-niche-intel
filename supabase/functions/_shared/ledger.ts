@@ -89,16 +89,16 @@ export const REQUIRED_LOCATION_KEYS = [
 
 export const KEY_GUIDE: Record<string, string> = {
   'land.price_per_acre_usd': 'Asking price per acre (USD) for rural land of 1-10 acres suitable for a small retreat',
-  'lease.finca_monthly_usd': 'Monthly rent (USD) for a furnished rural house or finca with 4+ bedrooms and some land',
-  'lease.commercial_monthly_usd': 'Monthly rent (USD) for a rural or edge-of-town property where a public-facing business (day visitors, parking) is allowed',
-  'lease.estate_monthly_usd': 'Monthly rent (USD) for a large rural estate (20+ acres) with several buildings',
+  'lease.finca_monthly_usd': 'Monthly rent (USD) on a long-term lease (12+ months) for a furnished rural house or finca with 4+ bedrooms and some land; not nightly or weekly vacation rates',
+  'lease.commercial_monthly_usd': 'Monthly rent (USD) on a long-term lease for a rural or edge-of-town property where a public-facing business (day visitors, parking) is allowed; not nightly or event rates',
+  'lease.estate_monthly_usd': 'Monthly rent (USD) on a long-term lease (12+ months) for a large rural estate (20+ acres) with several buildings; not nightly or weekly vacation rates',
   'tax.income_effective_pct': 'Effective income tax plus self-employment or social-security tax on about $60,000 a year of small-business profit, as a fraction',
-  'labor.monthly_wage_usd': 'Fully loaded monthly cost (USD) of one full-time hospitality worker, including employer charges',
+  'labor.monthly_wage_usd': 'Fully loaded monthly cost (USD) of one full-time entry-level hospitality worker (housekeeper, attendant, front desk) in rural areas, including employer charges; not an all-industry or professional average',
   'tax.revenue_pct': 'Taxes charged on gross revenue for a small lodging business, as a fraction (0.05 = 5%)',
   'build.cost_index': 'Construction cost relative to rural western North Carolina = 1.0',
   'price.index': 'What visitors pay for comparable wellness lodging relative to western North Carolina = 1.0',
   'demand.multiplier': 'Demand for this kind of destination relative to a typical US mountain area = 1.0',
-  'demand.population_40min': 'Population within roughly 40 minutes drive',
+  'demand.population_40min': 'People living within about a 40-minute drive: the population of each town or city within that drive, reported one per town (code adds them up)',
   'exit.country_discount': 'Discount a buyer would apply for country risk, currency and title (0 to 0.6)',
   'land.appreciation_pct': 'Typical annual rural land appreciation, as a fraction',
   'finance.rate_pct': 'Interest rate (percent) for a small-business real estate loan available to the owner',
@@ -116,3 +116,5 @@ export const INDEX_RAW: Record<string, string> = {
   'price.index': 'price.lodging_night_usd',
 };
 export const INDEX_REFERENCE_SLUG = 'us-nc-madison';
+
+export { PLAUSIBLE, SUMMED_KEYS } from './guards.ts';

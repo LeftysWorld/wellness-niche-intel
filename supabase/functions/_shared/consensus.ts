@@ -7,6 +7,8 @@ export interface Observation {
   url: string;
   /** The quoted figure was found on the page or in the search result text. */
   confirmed: boolean;
+  /** For totals made of parts: which part (e.g. a town) this figure is. */
+  part?: string;
 }
 
 export interface Consensus {

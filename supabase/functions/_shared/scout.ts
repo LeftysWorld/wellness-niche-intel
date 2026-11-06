@@ -9,6 +9,7 @@ import { ask } from './llm.ts';
 import { BudgetExceeded, type Run } from './runs.ts';
 import { search, type SearchHit } from './search.ts';
 import { consensus, type Observation } from './consensus.ts';
+import { inRange, sumParts, SUMMED_KEYS } from './guards.ts';
 
 /** Values that belong to a country; everything else belongs to a place within it. */
 export const COUNTRY_KEYS = new Set(['tax.revenue_pct', 'tax.income_effective_pct', 'exit.country_discount', 'labor.monthly_wage_usd', 'finance.rate_pct']);
@@ -18,10 +19,12 @@ export async function scoutLocation(run: Run, locationId: string, opts: { keys?:
   const fx = await getSetting<{ cop_per_usd?: number }>('currency');
   const location = must(await db().from('locations').select('*').eq('id', locationId).single(), 'location') as LocationRow;
   const current = must(
-    await db().from('current_assumptions').select('key,is_stale,written_by').eq('subject_type', 'location').eq('subject_id', locationId),
+    await db().from('current_assumptions').select('key,is_stale,written_by,value_num').eq('subject_type', 'location').eq('subject_id', locationId),
     'current values',
   );
-  const have = new Map<string, { is_stale: boolean; written_by: string }>(current.map((c: { key: string; is_stale: boolean; written_by: string }) => [c.key, c]));
+  const have = new Map<string, { is_stale: boolean; written_by: string; value_num: number | null }>(
+    current.map((c: { key: string; is_stale: boolean; written_by: string; value_num: number | null }) => [c.key, c]),
+  );
   const wanted = (opts.keys?.length ? opts.keys : [...REQUIRED_LOCATION_KEYS]).filter((k) => {
     const c = have.get(k);
     return opts.force || !c || c.is_stale || String(c.written_by).includes('estimate');
@@ -64,7 +67,7 @@ export async function scoutLocation(run: Run, locationId: string, opts: { keys?:
       misses[key] = { count: attempt + 1, last: new Date().toISOString() };
       continue;
     }
-    type Out = { found: boolean; unit: string; note: string; values: { value: number; source_index: number; quote: string }[] };
+    type Out = { found: boolean; fit: 'exact' | 'close' | 'proxy'; unit: string; note: string; values: { value: number; source_index: number; quote: string; part?: string }[] };
     let out: Out;
     try {
     out = await ask<Out>({
@@ -72,7 +75,7 @@ export async function scoutLocation(run: Run, locationId: string, opts: { keys?:
       // Numbers feed the money model directly, so they get the mid-tier model.
       model: models.numbers ?? models.judgment,
       system:
-        'You extract every figure for one value from search results, each with its source and an exact quote. Report one entry per listing, statistic or source (not one summary figure), at most 12 entries. Keep each quote short: just the words around the figure, under 25 words. Keep the note under 40 words. Convert currency and units to what is asked (e.g. hectares to acres, yearly to monthly) and say how in the note. Use figures about this place, or failing that from elsewhere in the same country; never use figures from another country. Set found=false only when nothing in the results is about this value.',
+        'You extract every figure for one value from search results, each with its source and an exact quote. Report one entry per listing, statistic or source (not one summary figure), at most 12 entries. Keep each quote short: just the words around the figure, under 25 words. Keep the note under 40 words. Convert currency and units to what is asked (e.g. hectares to acres, yearly to monthly) and say how in the note. Use figures about this place, or failing that from elsewhere in the same country; never use figures from another country. Set found=false only when nothing in the results is about this value. Set fit honestly: exact = the figures are this value for this place; close = the same measure for a nearby area or a slightly different size or type; proxy = a different measure standing in for it (an all-industry wage for a hospitality wage, one town for a whole drive-time area, a nightly rental for a long-term lease, a sale price for a rent). Proxies are discarded, so only call it close when it really is the same measure.',
       prompt: [
         `Location: ${location.name}${country ? `, ${country}` : ''} (${location.country_code}).`,
         `Value wanted (${key}): ${KEY_GUIDE[key] ?? key}.`,
@@ -86,6 +89,7 @@ export async function scoutLocation(run: Run, locationId: string, opts: { keys?:
           type: 'object',
           properties: {
             found: { type: 'boolean' },
+            fit: { type: 'string', enum: ['exact', 'close', 'proxy'], description: 'How well the figures match the value asked for' },
             unit: { type: 'string' },
             note: { type: 'string', description: 'How figures were converted and how they differ from what was asked' },
             values: {
@@ -96,12 +100,13 @@ export async function scoutLocation(run: Run, locationId: string, opts: { keys?:
                   value: { type: 'number', description: 'Converted to the unit asked for' },
                   source_index: { type: 'integer', description: 'The [n] of the result' },
                   quote: { type: 'string', description: 'The exact words from that result that contain the original figure, copied character for character' },
+                  part: { type: 'string', description: 'For totals made of parts (towns in a catchment): which part this figure is, e.g. the town name; otherwise empty' },
                 },
-                required: ['value', 'source_index', 'quote'],
+                required: ['value', 'source_index', 'quote', 'part'],
               },
             },
           },
-          required: ['found', 'unit', 'note', 'values'],
+          required: ['found', 'fit', 'unit', 'note', 'values'],
         },
       },
       maxTokens: 4000,
@@ -126,12 +131,32 @@ export async function scoutLocation(run: Run, locationId: string, opts: { keys?:
         fetched++;
         confirmed = squash(await fetchText(source.url, 60000)).includes(quote);
       }
-      observations.push({ value: v.value, url: source.url, confirmed });
+      observations.push({ value: v.value, url: source.url, confirmed, part: (v.part ?? '').trim().toLowerCase() || undefined });
     }
-    const c = consensus(observations);
-    if (!c) {
-      skipped.push({ key, reason: 'no usable figures', note: out.note });
+    const miss = (reason: string) => {
+      skipped.push({ key, reason, note: out.note });
       misses[key] = { count: attempt + 1, last: new Date().toISOString() };
+    };
+    // A stand-in for a different measure is never written, however well sourced.
+    if (out.found && out.fit === 'proxy') {
+      miss('only proxies found');
+      continue;
+    }
+    // Totals made of parts (towns in a catchment) are added up here, one figure per part.
+    const summed = SUMMED_KEYS.has(key) ? sumParts(observations) : null;
+    const c = summed ?? consensus(observations.filter((o) => inRange(key, o.value)));
+    if (!c) {
+      miss(observations.length ? 'figures outside the plausible range' : 'no usable figures');
+      continue;
+    }
+    if (!inRange(key, c.value)) {
+      miss('result outside the plausible range');
+      continue;
+    }
+    // A big change from the current value needs two separate sites to agree.
+    const prev = have.get(key)?.value_num;
+    if (prev && prev > 0 && (c.value / prev > 2 || prev / c.value > 2) && c.sources < 2) {
+      miss(`unconfirmed big change (${prev} → ${Math.round(c.value)}) from one site`);
       continue;
     }
     delete misses[key];
@@ -231,11 +256,11 @@ function queryFor(key: string, l: LocationRow): string {
     case 'tax.income_effective_pct':
       return es ? `tarifa régimen simple de tributación 2026 servicios` : `self-employment tax and income tax rate small business ${place}`;
     case 'labor.monthly_wage_usd':
-      return es ? `salario mínimo ${place} 2026 carga prestacional` : `hospitality worker wage ${place} 2026`;
+      return es ? `salario mínimo ${place} 2026 carga prestacional` : `housekeeper hotel worker hourly wage rural ${place} 2026`;
     case 'tax.revenue_pct':
       return es ? `régimen simple tributación tarifa hoteles ${place}` : `lodging tax rate ${place}`;
     case 'demand.population_40min':
-      return `population ${place} metropolitan area`;
+      return es ? `municipios cerca de ${place} a 40 minutos población` : `towns and cities within 40 minutes drive of ${place} population`;
     case 'exit.country_discount':
       return `foreign buyer risk real estate ${place} title currency`;
     case 'build.cost_per_sqft_usd':
@@ -270,7 +295,7 @@ function officialQuery(key: string, l: LocationRow, country?: string): string {
   const place = l.name;
   switch (key) {
     case 'demand.population_40min':
-      return cc === 'US' ? `${place} county population census estimate` : cc === 'CO' ? `población ${place} DANE proyección` : `population ${place} ${country ?? ''} census`;
+      return cc === 'US' ? `${place} and neighboring counties population census estimate` : cc === 'CO' ? `población municipios ${place} y cercanos DANE proyección` : `population ${place} and nearby towns ${country ?? ''} census`;
     case 'labor.monthly_wage_usd':
       return cc === 'US' ? `BLS hotel desk clerk hourly wage ${place}` : cc === 'CO' ? 'salario mínimo 2026 Colombia decreto auxilio de transporte' : `minimum wage 2026 ${country ?? place}`;
     case 'tax.income_effective_pct':
