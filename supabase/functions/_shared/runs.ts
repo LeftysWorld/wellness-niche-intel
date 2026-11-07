@@ -71,12 +71,13 @@ export async function startRun(
   kind: string,
   opts: { tokenBudget: number; searchBudget?: number; profileId?: string; subjectId?: string; input?: unknown; exclusive?: boolean },
 ): Promise<Run> {
-  // Runs left 'running' for over 30 minutes died mid-way (time limit or crash).
+  // Runs with no sign of life for 30 minutes died mid-way (time limit or crash).
+  // Agent sessions that span several calls keep their run alive with a heartbeat.
   await db()
     .from('runs')
     .update({ status: 'failed', error: 'Stopped without finishing (time limit or crash)', finished_at: new Date().toISOString() })
     .eq('status', 'running')
-    .lt('started_at', new Date(Date.now() - 30 * 60_000).toISOString());
+    .lt('heartbeat_at', new Date(Date.now() - 30 * 60_000).toISOString());
   if (opts.exclusive) {
     let q = db().from('runs').select('id').eq('kind', kind).eq('status', 'running');
     if (opts.subjectId) q = q.eq('subject_id', opts.subjectId);
@@ -92,20 +93,19 @@ export async function startRun(
         profile_id: opts.profileId ?? null,
         subject_id: opts.subjectId ?? null,
         token_budget: opts.tokenBudget,
-        input: opts.input ?? {},
+        // The search budget travels with the run so a resumed session keeps it.
+        input: { ...((opts.input as Record<string, unknown>) ?? {}), search_budget: opts.searchBudget ?? 50 },
       })
       .select('id')
       .single(),
     'start run',
   );
+  return makeRun({ id: row.id, kind, tokenBudget: opts.tokenBudget, searchBudget: opts.searchBudget ?? 50, tokensUsed: 0, searchCalls: 0, assumptionIds: [] });
+}
+
+function makeRun(state: Pick<Run, 'id' | 'kind' | 'tokenBudget' | 'searchBudget' | 'tokensUsed' | 'searchCalls' | 'assumptionIds'>): Run {
   const run: Run = {
-    id: row.id,
-    kind,
-    tokenBudget: opts.tokenBudget,
-    searchBudget: opts.searchBudget ?? 50,
-    tokensUsed: 0,
-    searchCalls: 0,
-    assumptionIds: [],
+    ...state,
     async charge(tokens: number) {
       run.tokensUsed += tokens;
       if (run.tokensUsed > run.tokenBudget) throw new BudgetExceeded(`Token budget ${run.tokenBudget} exceeded`);
@@ -117,6 +117,28 @@ export async function startRun(
     remaining: () => run.tokenBudget - run.tokensUsed,
   };
   return run;
+}
+
+/** Re-open a run that an agent session continues in a later function call. */
+export async function loadRun(id: string): Promise<Run> {
+  const row = must(await db().from('runs').select('id,kind,token_budget,tokens_used,search_calls,assumption_ids,input').eq('id', id).single(), 'load run');
+  return makeRun({
+    id: row.id,
+    kind: row.kind,
+    tokenBudget: row.token_budget ?? 0,
+    searchBudget: Number(row.input?.search_budget ?? 50),
+    tokensUsed: row.tokens_used ?? 0,
+    searchCalls: row.search_calls ?? 0,
+    assumptionIds: row.assumption_ids ?? [],
+  });
+}
+
+/** Save usage so far and show the run is alive (between slices of an agent session). */
+export async function saveProgress(run: Run) {
+  await db()
+    .from('runs')
+    .update({ tokens_used: run.tokensUsed, search_calls: run.searchCalls, assumption_ids: run.assumptionIds, heartbeat_at: new Date().toISOString() })
+    .eq('id', run.id);
 }
 
 export async function finishRun(run: Run, status: 'succeeded' | 'failed' | 'budget_exceeded' | 'skipped', output: unknown, error?: string) {

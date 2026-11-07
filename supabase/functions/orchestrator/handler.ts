@@ -12,6 +12,8 @@ import { withRun } from '../_shared/runs.ts';
 import { COUNTRY_KEYS, scoutLocation } from '../_shared/scout.ts';
 import { REQUIRED_LOCATION_KEYS } from '../_shared/ledger.ts';
 import { run as fitScreen } from '../fit-screen/handler.ts';
+import { agentSettings, resumeStalled, startAgent } from '../_shared/agent.ts';
+import { locationScout, pairingAnalyst } from '../_shared/agents/index.ts';
 
 async function processChangeEvents() {
   const events = must(await db().from('change_events').select('*').is('processed_at', null).limit(200), 'change events');
@@ -92,11 +94,28 @@ export async function run(body: Record<string, unknown>) {
   if (task === 'tick') {
     const decisions = await syncApprovals();
     const changes = await processChangeEvents();
-    const next = must(
-      await db().from('pairings').select('id').eq('status', 'approved').order('score_total', { ascending: false, nullsFirst: false }).limit(1).maybeSingle(),
-      'next pairing',
+    const resumed = await resumeStalled();
+    // Ideas whose analysis failed in the last day wait a day, so a broken idea cannot burn the budget every hour.
+    const failed = new Set(
+      (must(
+        await db().from('agent_sessions').select('subject_id').eq('agent', 'pairing-analyst').in('status', ['failed', 'budget_exceeded']).gte('created_at', new Date(Date.now() - 86_400_000).toISOString()),
+        'failed analyses',
+      ) as { subject_id: string }[]).map((r) => r.subject_id),
     );
-    if (!next) return { decisions, changes, analysed: null };
+    const queue = must(
+      await db().from('pairings').select('id').eq('status', 'approved').order('score_total', { ascending: false, nullsFirst: false }).limit(20),
+      'next pairing',
+    ) as { id: string }[];
+    const next = queue.find((q) => !failed.has(q.id));
+    if (!next) return { decisions, changes, resumed, analysed: null, waiting_after_failure: failed.size };
+    const settings = await agentSettings();
+    if (settings.enabled) {
+      // One analyst at a time keeps spending predictable; the next tick picks up the next idea.
+      const { count } = await db().from('agent_sessions').select('id', { count: 'exact', head: true }).eq('agent', 'pairing-analyst').in('status', ['running', 'paused']);
+      if ((count ?? 0) > 0) return { decisions, changes, resumed, analysed: 'an analysis is already running' };
+      const started = await startAgent(pairingAnalyst, { pairing_id: next.id }, { subjectId: next.id, input: { via: 'orchestrator' }, background: true });
+      return { decisions, changes, resumed, analysed: started };
+    }
     const analysis = await withRun('analysis', { tokenBudget: budgets.analysis_tokens + budgets.verify_tokens, searchBudget: 6, subjectId: next.id, input: { via: 'orchestrator' }, exclusive: true }, (run) =>
       analyzePairing(run, next.id, { research: true, verify: true }),
     );
@@ -122,6 +141,12 @@ export async function run(body: Record<string, unknown>) {
       }),
     );
     const pick = ages.sort((a, b) => b.gaps - a.gaps || a.newest - b.newest).slice(0, limit);
+    if ((await agentSettings()).enabled && body.mode !== 'classic') {
+      // The scout agent researches each place in its own background session.
+      const started: unknown[] = [];
+      for (const l of pick) started.push(await startAgent(locationScout, { location_id: l.id }, { subjectId: l.id, input: { via: 'refresh' }, background: true }));
+      return { refreshing: pick.map((l) => l.slug), started };
+    }
     return withRun('monthly_refresh', { tokenBudget: budgets.location_scout_tokens, searchBudget: 20 * limit, input: body, exclusive: true }, async (run) => {
       const out: unknown[] = [];
       for (const l of pick) out.push(await scoutLocation(run, l.id));

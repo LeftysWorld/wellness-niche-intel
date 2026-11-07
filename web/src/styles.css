@@ -220,3 +220,21 @@ button.primary { background: var(--accent); color: var(--card); border-color: va
   .bd-grid { grid-template-columns: minmax(0, 1fr); }
   .bd-palette { position: static; max-height: 40vh; }
 }
+
+/* Agents: quality scores, session traces, the analyst's memo */
+.pill.ok, .pill.finished { background: color-mix(in srgb, var(--ok) 20%, transparent); }
+.pill.bad { background: color-mix(in srgb, var(--err) 22%, transparent); }
+.pill.running, .pill.paused { background: color-mix(in srgb, #3b82d9 18%, transparent); }
+.card.inner { border: 1px solid var(--line); border-radius: 8px; padding: 0.75rem 1rem; margin: 0.75rem 0; box-shadow: none; }
+.card.inner h3 { margin: 0 0 0.4rem; font-size: 1rem; }
+.card.inner h4 { margin: 0.4rem 0 0.2rem; font-size: 0.85rem; color: var(--muted); }
+.cols { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; }
+.cols ul { margin: 0; padding-left: 1.1rem; }
+.steps { margin: 0.25rem 0; padding-left: 1.4rem; max-height: 480px; overflow: auto; }
+.steps li { margin-bottom: 0.35rem; overflow-wrap: anywhere; }
+.steps li.err b { color: var(--err); }
+.steps code { font-size: 0.75rem; }
+@media (max-width: 760px) {
+  .cols { grid-template-columns: 1fr; }
+  .steps { max-height: 320px; }
+}

@@ -86,8 +86,13 @@ export function Ideas() {
     reload();
   }
 
+  // Starts the analyst agent in the background (asking for an analysis approves the idea).
   async function approve(id: string) {
-    await supabase.from('pairings').update({ status: 'approved' }).eq('id', id);
+    try {
+      await callAgent('analyze-pairing', { pairing_id: id });
+    } catch {
+      await supabase.from('pairings').update({ status: 'approved' }).eq('id', id);
+    }
     reload();
   }
 

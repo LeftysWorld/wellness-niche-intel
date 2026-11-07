@@ -191,6 +191,20 @@ function parseCurve(v: LedgerValue | undefined): number[] | undefined {
   }
 }
 
+/**
+ * How the number of comparable businesses within about 60 minutes shifts
+ * expected occupancy. None found proves nothing either way; one or two show
+ * demand with room to spare; beyond that each newcomer splits the market.
+ */
+export function competitionFactor(competitors: number): number {
+  const n = Math.max(0, Math.round(competitors));
+  if (n === 0) return 1;
+  if (n <= 2) return 1.05;
+  if (n <= 5) return 0.95;
+  if (n <= 9) return 0.85;
+  return 0.75;
+}
+
 export function isEstimate(v: LedgerValue): boolean {
   return v.written_by.includes('estimate') || !v.source_url;
 }
@@ -233,6 +247,8 @@ export function buildModel(input: BuildInput): BuildOutput {
   const destinationDemand = has('demand.destination_multiplier') ? readMode('demand.destination_multiplier', 1) : readMode('demand.multiplier', 1);
   const population = has('demand.population_40min') ? readMode('demand.population_40min', 0) : null;
   const localDemand = population !== null ? Math.min(1.3, Math.max(0.3, Math.sqrt(population / 400000))) : destinationDemand;
+  // Competition: comparable businesses within about 60 minutes, counted by the analyst agent for this idea.
+  const crowding = has('demand.competitors_60min') ? competitionFactor(readMode('demand.competitors_60min', 0)) : 1;
   const curve = parseCurve(ledger.get('demand.seasonality'));
   if (ledger.get('demand.seasonality')) note('demand.seasonality', ledger.get('demand.seasonality')!);
   // Locals are steadier through the year than travellers.
@@ -244,7 +260,7 @@ export function buildModel(input: BuildInput): BuildOutput {
   // Revenue streams: niche defaults, localised by market, overridden by pairing research.
   const streams: RevenueStream[] = spec.streams.map((s) => {
     const market = s.market ?? (spec.requiresPopulation ? 'local' : 'destination');
-    const demand = market === 'local' ? localDemand : destinationDemand;
+    const demand = (market === 'local' ? localDemand : destinationDemand) * crowding;
     const priceIndex = market === 'local' ? priceLocal : priceDestination;
     const priceOverride = ledger.get(`price.${s.key}_usd`);
     const price = priceOverride?.value_num != null ? (note(`price.${s.key}_usd`, priceOverride), ledgerTri(priceOverride)) : mul(s.price, priceIndex);

@@ -83,7 +83,25 @@ async function researchPrices(run: Run, pairingId: string, niche: NicheRow, loca
   return writeAssumptions(run, 'analyze-pairing', rows);
 }
 
-export async function analyzePairing(run: Run, pairingId: string, opts: { research: boolean; verify: boolean }) {
+/** Asking for a full analysis is the approval: any idea not rejected moves to approved. */
+export async function approveForAnalysis(pairingId: string) {
+  const p = must(await db().from('pairings').select('id,status').eq('id', pairingId).single(), 'pairing');
+  if (p.status === 'rejected') throw new HttpError(409, 'This idea was rejected; restore it before analysing it.');
+  if (!['approved', 'analyzed', 'verified'].includes(p.status)) await db().from('pairings').update({ status: 'approved' }).eq('id', pairingId);
+}
+
+export async function analyzePairing(
+  run: Run,
+  pairingId: string,
+  opts: {
+    research: boolean;
+    verify: boolean;
+    /** Verify in a separate background call (keeps this call short). */
+    verifyInBackground?: boolean;
+    /** Stored with the result: the analyst's memo, research rounds and competition. */
+    extras?: Record<string, unknown>;
+  },
+) {
   const th = await getSetting<Thresholds>('thresholds');
   const models = await getSetting<Models>('models');
   const p = must(await db().from('pairings').select('*').eq('id', pairingId).single(), 'pairing');
@@ -118,6 +136,7 @@ export async function analyzePairing(run: Run, pairingId: string, opts: { resear
           evidence: ev,
           missing: best.build.missing,
           weakInputs: best.build.weakInputs,
+          ...(opts.extras ?? {}),
           alternative: alt ? { tenure: alt.tenure, year1: alt.result.year1, year3: alt.result.year3, year5: alt.result.year5, startup: alt.result.startup.total, fundable: alt.result.startup.fundable } : null,
         },
         assumption_ids: best.build.usedAssumptionIds,
@@ -132,13 +151,14 @@ export async function analyzePairing(run: Run, pairingId: string, opts: { resear
   await db().from('pairings').update({ status: 'analyzed', latest_result_id: saved.id, rough_profit_year3: best.result.year3.takeHome.p50 }).eq('id', pairingId);
 
   let verification: Awaited<ReturnType<typeof verifyResult>> | null = null;
-  if (opts.verify) verification = await verifyResult(run, saved.id);
+  if (opts.verify && opts.verifyInBackground) await db().rpc('queue_agent', { p_name: 'verifier', p_body: { result_id: saved.id } });
+  else if (opts.verify) verification = await verifyResult(run, saved.id);
   return {
     resultId: saved.id,
     tenure: best.tenure,
     researchedValues: researched.length,
     takeHomeP50: { year1: best.result.year1.takeHome.p50, year3: best.result.year3.takeHome.p50, year5: best.result.year5.takeHome.p50 },
     startupP50: best.result.startup.total.p50,
-    verifier: verification?.status ?? 'skipped',
+    verifier: verification?.status ?? (opts.verify && opts.verifyInBackground ? 'queued' : 'skipped'),
   };
 }
