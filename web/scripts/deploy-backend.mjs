@@ -42,8 +42,9 @@ const sha = env.VERCEL_GIT_COMMIT_SHA ?? 'unknown';
 
 if (env.SUPABASE_DB_PASSWORD) {
   run(`${cli} link --project-ref ${PROJECT_REF}`);
-  // Newer CLIs target the linked project with --remote; older ones with --linked.
-  if (!run(`${cli} db push --remote`, { soft: true })) run(`${cli} db push --linked`);
+  // Newer CLIs target the linked project with --remote; older ones with --linked. Newer CLIs also
+  // ask before applying migrations, and a build has no terminal, so --yes confirms up front.
+  if (!run(`${cli} db push --remote --yes`, { soft: true }) && !run(`${cli} db push --linked --yes`, { soft: true })) run(`${cli} db push --linked`);
 } else {
   console.log('[backend] SUPABASE_DB_PASSWORD is not set; skipping migrations.');
 }
