@@ -504,11 +504,11 @@ function Results({ design }: { design: Design }) {
           {r.draft.examplesAdded ? ` · ${r.draft.examplesAdded} real operators found` : ''}
         </p>
       )}
-      {data?.niche?.card?.review?.concerns?.length > 0 && (
+      {(data?.niche?.card?.review?.concerns?.length ?? 0) > 0 && (
         <details className="small">
-          <summary>Reviewer's concerns ({data.niche.card.review.concerns.length})</summary>
+          <summary>Reviewer's concerns ({data?.niche?.card?.review?.concerns?.length})</summary>
           <ul>
-            {data.niche.card.review.concerns.map((c: string) => (
+            {(data?.niche?.card?.review?.concerns ?? []).map((c: string) => (
               <li key={c}>{c}</li>
             ))}
           </ul>
