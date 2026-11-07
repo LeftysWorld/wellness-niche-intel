@@ -61,3 +61,18 @@ test('living on site counts the housing saved in the lender test and the with-ho
   assert.equal(a.year1.takeHomeWithHousing.p50, Math.round((a.year1.takeHome.p50 + 1500) * 100) / 100);
   assert.ok(a.lender.dscrP50! > b.lender.dscrP50!, 'housing saved improves coverage');
 });
+
+test('a niche that fixes its property choice is only modelled that way', async () => {
+  const { evaluateBuilt } = await import('../supabase/functions/_shared/evaluate.ts');
+  const run = (tenures?: string[]) =>
+    evaluateBuilt({
+      niche: { ...niche, model: { ...niche.model, tenures } },
+      template: data.template,
+      location: US,
+      ledger: us,
+      profile: { ...base, financing_allowed: ['cash', 'sba', 'lease'], own_or_lease: 'either' },
+      simulations: 100,
+    }).map((c) => c.tenure).sort();
+  assert.deepEqual(run(), ['ground', 'lease', 'own']);
+  assert.deepEqual(run(['ground']), ['ground']);
+});

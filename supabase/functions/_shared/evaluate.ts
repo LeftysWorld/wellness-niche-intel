@@ -25,7 +25,11 @@ export function evaluateBuilt(input: {
   const { profile } = input;
   const pref = profile.own_or_lease ?? 'either';
   // "either" compares all three: lease a property, rent land and build, or buy land and build.
-  const tenures: Tenure[] = pref === 'own' ? ['own'] : pref === 'lease' ? ['lease'] : pref === 'ground' ? ['ground'] : ['lease', 'ground', 'own'];
+  const fromProfile: Tenure[] = pref === 'own' ? ['own'] : pref === 'lease' ? ['lease'] : pref === 'ground' ? ['ground'] : ['lease', 'ground', 'own'];
+  // A niche that fixes how it holds its site (a Builder design) overrides "compare all".
+  const fixed = input.niche.model.tenures?.filter((t) => ['own', 'lease', 'ground'].includes(t)) ?? [];
+  const both = fixed.filter((t) => fromProfile.includes(t));
+  const tenures: Tenure[] = fixed.length ? (both.length ? both : fixed) : fromProfile;
   const targetYear = Number(profile.target_year ?? 1);
   const basis: TargetBasis = profile.target_basis === 'pre_tax' || profile.target_basis === 'with_housing' ? profile.target_basis : 'after_tax';
   const build = (tenure: Tenure, financingOverride?: 'cash'): Candidate => {

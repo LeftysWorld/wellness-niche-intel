@@ -55,6 +55,8 @@ export interface NicheModelSpec {
   ownerFixedHours: number;
   /** Hours per month someone must be on site because the business is open. */
   openHoursPerMonth?: number;
+  /** Ways this niche may hold its site (a Builder design can fix one); all when unset. */
+  tenures?: Tenure[];
   /** Months from start to opening, by tenure (ground uses own: the structures still get built). */
   buildMonths?: { own?: Tri; lease?: Tri; ground?: Tri };
   /** house: a rentable home with rooms; commercial: public-facing use; estate: large acreage with buildings. */

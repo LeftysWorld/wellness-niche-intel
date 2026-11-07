@@ -20,6 +20,12 @@ interface Design {
   research: Record<string, unknown>;
 }
 
+const TENURE_FOR: Record<string, string[] | undefined> = {
+  'Buy land and build': ['own'],
+  'Rent land and build my own': ['ground'],
+  'Lease an existing property': ['lease'],
+};
+
 const slugify = (s: string) => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 48);
 
 async function load(id: string) {
@@ -119,6 +125,19 @@ export async function run(body: Record<string, unknown>) {
       await db().from('designs').update({ last_run_id: r.id }).eq('id', id);
       try {
         const drafted = await draftNiche(r, models, design.niche_id!, { text: brief.text, queries: brief.queries, baseNicheId: brief.baseNicheId });
+        // The design's property choice limits how its ideas hold the site, then re-screen.
+        const choice = String((design.blocks ?? []).find((b) => b.type === 'property')?.params?.choice ?? '');
+        const tenures = TENURE_FOR[choice];
+        if (drafted.ok) {
+          const n = must(await db().from('niches').select('card').eq('id', design.niche_id!).single(), 'niche') as { card: { model?: Record<string, unknown> } };
+          if (n.card?.model) {
+            const model = { ...n.card.model };
+            if (tenures) model.tenures = tenures;
+            else delete model.tenures;
+            await db().from('niches').update({ card: { ...n.card, model } }).eq('id', design.niche_id!);
+            await db().rpc('queue_fit_screen', { p_niche: design.niche_id, p_location: null });
+          }
+        }
         await save(id, 'draft', { ...drafted, finished_at: new Date().toISOString() }, drafted.ok ? 'ready' : 'failed');
         return drafted;
       } catch (e) {
