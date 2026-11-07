@@ -105,7 +105,7 @@ export async function run(body: Record<string, unknown>) {
   const { design, brief } = await load(id);
 
   if (phase === 'questions') {
-    return withRun('niche_builder', { tokenBudget: 60000, searchBudget: 8, subjectId: `${id}:questions`, input: body }, async (r) => {
+    return withRun('niche_builder', { tokenBudget: 60000, searchBudget: 8, subjectId: id, input: body }, async (r) => {
       const answers: Awaited<ReturnType<typeof answer>>[] = [];
       for (const q of brief.questions) answers.push(await answer(r, models, q, brief.text));
       await save(id, 'answers', answers);
@@ -115,7 +115,7 @@ export async function run(body: Record<string, unknown>) {
 
   if (phase === 'draft') {
     if (!design.niche_id) throw new HttpError(400, 'Start research from the Builder first');
-    const result = await withRun('niche_builder', { tokenBudget: budgets.niche_discovery_tokens, searchBudget: 40, subjectId: `${id}:draft`, input: body }, async (r) => {
+    const result = await withRun('niche_builder', { tokenBudget: budgets.niche_discovery_tokens, searchBudget: 40, subjectId: id, input: body }, async (r) => {
       await db().from('designs').update({ last_run_id: r.id }).eq('id', id);
       try {
         const drafted = await draftNiche(r, models, design.niche_id!, { text: brief.text, queries: brief.queries, baseNicheId: brief.baseNicheId });
