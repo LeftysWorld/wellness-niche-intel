@@ -12,6 +12,9 @@ import { analyze } from '../_shared/engine/index.ts';
 import { withRun, type Run } from '../_shared/runs.ts';
 import { DESCRIBE_SCHEMA, ECONOMICS_SCHEMA, obj, str, strs, toModelAndTemplate, type Describe, type Economics } from '../_shared/niche-schemas.ts';
 import { search } from '../_shared/search.ts';
+import { agentSettings, startAgent } from '../_shared/agent.ts';
+import { nicheScout } from '../_shared/agents/index.ts';
+import { displayName } from '../_shared/niche-intake.ts';
 
 /** Run the drafted card through the engine with a neutral US ledger to catch broken drafts. */
 function smokeTest(model: NicheModelSpec, template: CostTemplate): string[] {
@@ -200,7 +203,7 @@ async function brainstorm(run: Run, models: Models) {
       continue;
     }
     const slug = idea.name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 60);
-    const { error } = await db().from('niches').insert({ slug, name: idea.name, family: 'brainstorm', status: 'proposed', card: { description: idea.description, discovered_from: source.url } });
+    const { error } = await db().from('niches').insert({ slug, name: displayName(idea.name), family: 'brainstorm', status: 'proposed', card: { description: idea.description, discovered_from: source.url } });
     if (error) skipped.push(`${idea.name} (${error.message})`);
     else added.push(idea.name);
   }
@@ -208,6 +211,10 @@ async function brainstorm(run: Run, models: Models) {
 }
 
 export async function run(body: Record<string, unknown>) {
+  // Brainstorming is done by the niche scout agent (agents/niche-scout.md); agent=false runs the earlier single pass.
+  if (body.mode === 'brainstorm' && body.agent !== false && (await agentSettings()).enabled) {
+    return await startAgent(nicheScout, { target: body.target as number | undefined }, { input: body, background: String(body._caller ?? '').startsWith('user:') });
+  }
   const budgets = await getSetting<Budgets>('budgets');
   const models = await getSetting<Models>('models');
   return withRun('niche_discovery', { tokenBudget: budgets.niche_discovery_tokens, searchBudget: 40, subjectId: body.niche_id as string | undefined, input: body }, async (run) => {

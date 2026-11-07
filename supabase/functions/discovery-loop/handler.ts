@@ -5,6 +5,7 @@
 //   mode=weekly → every concept query plus businesses-for-sale queries
 import { db, getSetting, must, type Budgets, type Models } from '../_shared/db.ts';
 import { ask, clip } from '../_shared/llm.ts';
+import { displayName } from '../_shared/niche-intake.ts';
 import { withRun, type Run } from '../_shared/runs.ts';
 import { search, type SearchHit } from '../_shared/search.ts';
 
@@ -197,7 +198,8 @@ export async function run(body: Record<string, unknown>) {
         if (g?.existing_slug && bySlug.has(g.existing_slug)) {
           nicheId = must(await db().from('niches').select('id').eq('slug', g.existing_slug).single(), 'niche').id;
         } else {
-          const label = (g?.new_group || x.niche_guess).trim();
+          // Type names come back as words or identifiers; store words ("Camp and retreat center").
+          const label = displayName((g?.new_group || x.niche_guess).trim());
           const slug = slugify(label) || slugify(x.name);
           if (created.has(slug)) nicheId = created.get(slug)!;
           else {

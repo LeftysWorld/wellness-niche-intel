@@ -4,6 +4,7 @@ import type { AnalysisResult, BusinessModel, Tri } from '../../../supabase/funct
 import { callAgent, supabase, usd } from '../supabase.ts';
 import { Err, EvidenceBadge, Loading, RunButton, Section, useLoad } from '../ui.tsx';
 import { computeLive, loadLive } from '../live.ts';
+import { AnalystPanel } from '../agents.tsx';
 import type { Candidate } from '../../../supabase/functions/_shared/evaluate.ts';
 
 const scale = (t: Tri, k: number): Tri => ({ low: t.low * k, mode: t.mode * k, high: t.high * k });
@@ -166,6 +167,7 @@ export function PairingPage({ id }: { id: string }) {
               <RunButton label="Queue full analysis" action={async () => supabase.from('pairings').update({ status: 'approved' }).eq('id', id)} onDone={reload} />
             )}
             <RunButton label={storedR ? 'Redo full analysis' : 'Run full analysis now'} action={() => callAgent('analyze-pairing', { pairing_id: id })} onDone={reload} />
+            <RunButton label="Quick re-run (no research)" action={() => callAgent('analyze-pairing', { pairing_id: id, agent: false, research: false })} onDone={reload} />
             {ar && <RunButton label="Re-verify" action={() => callAgent('verifier', { result_id: ar.id })} onDone={reload} />}
           </>
         }
@@ -180,10 +182,12 @@ export function PairingPage({ id }: { id: string }) {
             </>
           )}
         </p>
+        <AnalystPanel pairingId={id} result={storedR} />
         {isLive && (
           <p className="banner warn small">
-            <b>Live estimate.</b> Calculated just now with the same calculator and data as the screening. The full analysis (fresh AI research on this exact idea plus an
-            independent check) hasn't been run; press <i>Run full analysis now</i> for it. It uses AI credit; see Activity for the cost.
+            <b>Live estimate.</b> Calculated just now with the same calculator and data as the screening. The full analysis hasn't been run: an analyst agent researches the
+            inputs that move profit most (local prices, occupancy, competition) until the range is narrow, writes a verdict, and an independent check reviews it. Press <i>Run full
+            analysis now</i>; it runs in the background for a few minutes and uses AI credit (see Activity for the cost).
           </p>
         )}
         {!r ? (

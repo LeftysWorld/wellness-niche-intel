@@ -203,7 +203,7 @@ async function currentRaw(locationId: string, key: string): Promise<RawValue | n
 }
 
 /** Index = this place's raw figure / the reference place's raw figure. */
-async function writeIndex(run: Run, location: LocationRow, key: string): Promise<{ written?: string[]; reason?: string }> {
+export async function writeIndex(run: Run, location: LocationRow, key: string): Promise<{ written?: string[]; reason?: string }> {
   const rawKey = INDEX_RAW[key];
   const ref = must(await db().from('locations').select('*').eq('slug', INDEX_REFERENCE_SLUG).maybeSingle(), 'reference place') as LocationRow | null;
   if (!ref) return { reason: 'reference place missing' };
