@@ -8,6 +8,7 @@ import { run as fitScreen } from '../fit-screen/handler.ts';
 import { run as locationFit } from '../location-fit/handler.ts';
 import { run as locationIdeas } from '../location-ideas/handler.ts';
 import { run as locationScout } from '../location-scout/handler.ts';
+import { run as nicheBuilder } from '../niche-builder/handler.ts';
 import { run as nicheDiscovery } from '../niche-discovery/handler.ts';
 import { run as orchestrator } from '../orchestrator/handler.ts';
 import { run as siteCheck } from '../site-check/handler.ts';
@@ -20,6 +21,7 @@ const routes: Record<string, (body: Record<string, unknown>) => Promise<unknown>
   'location-fit': locationFit,
   'location-ideas': locationIdeas,
   'location-scout': locationScout,
+  'niche-builder': nicheBuilder,
   'niche-discovery': nicheDiscovery,
   orchestrator,
   'site-check': siteCheck,

@@ -40,18 +40,32 @@ function smokeTest(model: NicheModelSpec, template: CostTemplate): string[] {
   return problems;
 }
 
-async function draftNiche(run: Run, models: Models, nicheId: string) {
+/** A design from the Builder: the owner's requirements, extra searches, and an optional niche to build on. */
+export interface DesignBrief {
+  text: string;
+  queries: string[];
+  baseNicheId?: string | null;
+}
+
+export async function draftNiche(run: Run, models: Models, nicheId: string, design?: DesignBrief) {
   const niche = must(await db().from('niches').select('*').eq('id', nicheId).single(), 'niche');
-  const examples = must(await db().from('example_businesses').select('name,locality,country,url,description,prices').eq('niche_id', nicheId).limit(8), 'examples');
+  const examples = must(await db().from('example_businesses').select('name,locality,country,url,description,prices').eq('niche_id', design?.baseNicheId ?? nicheId).limit(8), 'examples');
   const seen = new Set<string>();
   const hits = [
     ...(await search(run, `${niche.name} retreat business`, 8)),
     ...(await search(run, `${niche.name} prices per night packages`, 6)),
     ...(await search(run, `how much does it cost to build ${niche.name} startup cost`, 6)),
+    ...(design ? (await Promise.all(design.queries.map((q) => search(run, q, 5)))).flat() : []),
   ].filter((h) => !seen.has(h.url) && seen.add(h.url));
-  const reference = must(await db().from('niches').select('card').eq('slug', 'dark-retreat').maybeSingle(), 'reference card');
+  // A design built on an existing niche uses that niche's economics as the reference shape.
+  const base = design?.baseNicheId ? must(await db().from('niches').select('name,card').eq('id', design.baseNicheId).maybeSingle(), 'base niche') : null;
+  const reference = base?.card?.model ? base : must(await db().from('niches').select('card').eq('slug', 'dark-retreat').maybeSingle(), 'reference card');
   const context = [
     `Niche: ${niche.name}${niche.card?.description ? ` — ${niche.card.description}` : ''}${niche.card?.note ? ` — ${niche.card.note}` : ''}`,
+    design ? `The owner designed this business in the Builder. Follow the design exactly: model every offer and facility it lists, with its quantities and any prices given (treat a given price as the owner's intended price and check it against the evidence). Add only what is needed to operate (permits, parking, utilities). Respect the property, money and operations choices.
+
+${design.text}` : '',
+    base ? `It builds on the existing niche "${base.name}": ${clip(String(base.card?.summary ?? base.card?.description ?? ''), 600)}` : '',
     `Known operating examples:\n${examples.map((e) => `- ${e.name} (${e.locality}, ${e.country}) ${e.url}: ${clip(e.description ?? '', 300)} prices=${JSON.stringify(e.prices)}`).join('\n') || '(none)'}`,
     `Search results:\n${hits.map((h, i) => `[${i}] ${h.url}\n  ${h.title}: ${clip(h.snippet, 400)}`).join('\n')}`,
   ].join('\n\n');

@@ -8,11 +8,13 @@ import { PairingPage } from './pages/Pairing.tsx';
 import { Review } from './pages/Review.tsx';
 import { Runs } from './pages/Runs.tsx';
 import { Settings } from './pages/Settings.tsx';
+import { Builder } from './pages/Builder.tsx';
 
 const NAV = [
   ['ideas', 'Business ideas'],
   ['niches', 'Niches'],
   ['locations', 'Locations'],
+  ['builder', 'Builder'],
   ['review', 'To review'],
   ['activity', 'Activity'],
   ['settings', 'Settings'],
@@ -87,6 +89,7 @@ export function App() {
         {page === 'ideas' && <Ideas />}
         {page === 'niches' && <Niches />}
         {page === 'locations' && <Locations />}
+        {page === 'builder' && <Builder />}
         {page === 'review' && <Review />}
         {page === 'activity' && <Runs />}
         {page === 'settings' && <Settings />}

@@ -41,6 +41,7 @@ const KIND: Record<string, string> = {
   analysis: 'Full analysis',
   verify: 'Independent check',
   discovery_loop: 'Find new businesses',
+  niche_builder: 'Builder research',
 };
 
 const dur = (r: { started_at: string; finished_at: string | null }) => (r.finished_at ? Math.round(((Date.parse(r.finished_at) - Date.parse(r.started_at)) / 60000) * 10) / 10 : null);
