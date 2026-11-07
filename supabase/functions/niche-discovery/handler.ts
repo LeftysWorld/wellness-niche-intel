@@ -78,7 +78,7 @@ ${design.text}` : '',
     system: 'You describe small wellness businesses that need land or a dedicated structure, for someone deciding which to start. Be concrete and plain. Use only what the material supports.',
     prompt: `${context}\n\nDescribe this niche. Under operating_examples list real businesses you can see in the results, citing the [n], and mark matches_definition false for anything only loosely related (e.g. a planetarium is not a sound-healing dome). List the site prerequisites honestly: things that cannot be built anywhere (a natural hot spring) must be listed.`,
     tool: { name: 'niche_description', description: 'A description of the niche', schema: DESCRIBE_SCHEMA },
-    maxTokens: 4000,
+    maxTokens: 8000,
   }),
   ask<Economics>({
     run,
