@@ -4,6 +4,7 @@ import { useState, type ReactNode } from 'react';
 import { usd } from './supabase.ts';
 import type { FeatureView } from '../../supabase/functions/_shared/concept.ts';
 import { DEFAULT_WEIGHTS } from '../../supabase/functions/_shared/scoring.ts';
+import { KIND_LABEL } from '../../supabase/functions/_shared/demand.ts';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Any = any;
@@ -284,5 +285,91 @@ export function Fold({ title, children, open = false }: { title: string; childre
       </button>
       {on && <div className="ip-fold-body">{children}</div>}
     </section>
+  );
+}
+
+const LEVEL_TONE: Record<string, string> = { strong: 'ok', moderate: 'warn', weak: 'bad', unclear: '' };
+
+function DemandScope({ title, question, score, summary, signals }: { title: string; question: string; score: Any; summary?: string; signals: Any[] }) {
+  return (
+    <div className="ip-card ip-demand">
+      <div className="ip-row">
+        <div>
+          <h3>{title}</h3>
+          <p className="muted small">{question}</p>
+        </div>
+        <span className={`pill ${LEVEL_TONE[score.level] ?? ''}`}>{score.level}</span>
+      </div>
+      <div className="ip-gauge">
+        <span className="ip-track">
+          <span className="ip-fill" style={{ width: `${score.score * 10}%` }} />
+        </span>
+        <b>{score.score.toFixed(1)}/10</b>
+      </div>
+      <p className="muted small">
+        {score.signals} signal{score.signals === 1 ? '' : 's'} from {score.sources} independent site{score.sources === 1 ? '' : 's'} · confidence {score.confidence}
+      </p>
+      {summary && <p className="small">{summary}</p>}
+      <ul className="ip-signals">
+        {signals.map((s, i) => (
+          <li key={i} className={s.direction}>
+            <span className="ip-dir" aria-label={s.direction === 'for' ? 'for' : 'against'}>
+              {s.direction === 'for' ? '+' : '−'}
+            </span>
+            <span>
+              <b>{KIND_LABEL[s.kind as keyof typeof KIND_LABEL] ?? s.kind}.</b> {s.finding}{' '}
+              <a href={s.url} target="_blank" rel="noreferrer">
+                source
+              </a>
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/** Demand pull: is this wanted at all, and by people within reach of this place? */
+export function DemandBlock({ demand, nicheScore, nicheEvidence }: { demand: Any; nicheScore?: number; nicheEvidence?: string }) {
+  if (!demand) {
+    return (
+      <div className="ip-card">
+        <p className="banner warn small">
+          Demand pull has not been researched for this place yet. A full analysis has the analyst look for evidence that people already want this, in the market and within reach
+          of this place, and scores it from what it finds.
+        </p>
+        {typeof nicheScore === 'number' && (
+          <p className="small">
+            <b>General demand for this kind of business: {nicheScore}/10</b> <span className="muted">(from the niche write-up, not this place)</span>
+            {nicheEvidence ? ` ${nicheEvidence}` : ''}
+          </p>
+        )}
+      </div>
+    );
+  }
+  const signals: Any[] = demand.signals ?? [];
+  return (
+    <>
+      <div className="ip-card ip-row ip-demand-sum">
+        <span>
+          <b>Overall demand pull {demand.overall.toFixed(1)}/10</b> <span className="muted small">(area counts 60%, market 40%)</span>
+        </span>
+        <span className={`pill ${LEVEL_TONE[demand.level] ?? ''}`}>{demand.level}</span>
+      </div>
+      <div className="ip-split even">
+        <DemandScope title="In the market" question="Is this kind of business wanted, and is that growing?" score={demand.market} summary={demand.market_summary} signals={signals.filter((s) => s.scope === 'market')} />
+        <DemandScope title="In this area" question="Do people within reach of this place want it?" score={demand.area} summary={demand.area_summary} signals={signals.filter((s) => s.scope === 'area')} />
+      </div>
+      {(demand.unknowns ?? []).length > 0 && (
+        <div className="ip-card">
+          <h3>Still unknown about demand</h3>
+          <ul className="small">
+            {demand.unknowns.map((u: string) => (
+              <li key={u}>{u}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </>
   );
 }

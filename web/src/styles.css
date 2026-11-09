@@ -311,3 +311,13 @@ button.primary { background: var(--accent); color: var(--card); border-color: va
   .ip-range > span { grid-column: 1 / -1; }
   .ip-block-head h2 { font-size: 1.15rem; }
 }
+.ip-demand { display: flex; flex-direction: column; gap: 0.5rem; }
+.ip-demand h3 { margin: 0; }
+.ip-demand p { margin: 0; }
+.ip-demand-sum { align-items: center; }
+.ip-gauge { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0.6rem; align-items: center; }
+.ip-signals { list-style: none; margin: 0.2rem 0 0; padding: 0; display: flex; flex-direction: column; gap: 0.45rem; font-size: 0.88rem; }
+.ip-signals li { display: flex; gap: 0.5rem; align-items: flex-start; }
+.ip-dir { flex: 0 0 1.3rem; height: 1.3rem; border-radius: 99px; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 0.85rem; }
+.ip-signals li.for .ip-dir { background: color-mix(in srgb, var(--ok) 20%, transparent); color: var(--ok); }
+.ip-signals li.against .ip-dir { background: color-mix(in srgb, var(--err) 18%, transparent); color: var(--err); }

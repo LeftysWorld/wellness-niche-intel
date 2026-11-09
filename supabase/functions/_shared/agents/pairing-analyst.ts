@@ -9,6 +9,7 @@ import { analyzePairing } from '../analysis.ts';
 import { db, must } from '../db.ts';
 import { driverKeys, PAIRING_KEY, uncertaintyBand } from '../drivers.ts';
 import { hostOf } from '../evidence.ts';
+import { AREA_KINDS, demandGaps, demandPull, kindsFor, MARKET_KINDS, type DemandKind, type DemandScope, type DemandSignal } from '../demand.ts';
 import { KEY_GUIDE, PLAUSIBLE, REQUIRED_LOCATION_KEYS, writeAssumptions, type LocationRow } from '../ledger.ts';
 import type { NicheModelSpec } from '../model-builder.ts';
 import { evaluate, type NicheRow } from '../pairing.ts';
@@ -36,6 +37,12 @@ async function loadAll(pairingId: string) {
   const location = must(await db().from('locations').select('*').eq('id', p.location_id).single(), 'location') as LocationRow;
   const profile = must(await db().from('parameter_profiles').select('*').eq('id', p.profile_id).single(), 'profile');
   return { p, niche, location, profile };
+}
+
+function demandOf(ctx: Ctx, written?: Record<string, unknown>) {
+  const signals = (ctx.scratch.demand_signals ?? []) as DemandSignal[];
+  if (!signals.length && !written) return null;
+  return { ...demandPull(signals), signals, ...(written ?? {}) };
 }
 
 function research(ctx: Ctx) {
@@ -151,7 +158,49 @@ export const pairingAnalyst: AgentDef<AnalystParams> = {
       },
     };
 
-    const tools: AgentTool<AnalystParams>[] = [runModel, webSearch, fetchPage, record, commit, recordCompetitor, commitCompetition];
+
+    const recordDemand: AgentTool<AnalystParams> = {
+      name: 'record_demand_signal',
+      description:
+        'Record one piece of evidence about demand pull, with an exact quote from a page you saw. scope "market": is this kind of business wanted at all (search interest, operators opening sites, industry data, press, pricing power). scope "area": do people within reach of this place want it (busy nearby operators, local interest, population and income, visitors, related demand such as gyms or yoga studios, crowding, seasonality). Record evidence against as well as for.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          scope: { type: 'string', enum: ['market', 'area'] },
+          kind: { type: 'string', enum: [...MARKET_KINDS, ...AREA_KINDS] },
+          direction: { type: 'string', enum: ['for', 'against'] },
+          strength: { type: 'integer', enum: [1, 2, 3], description: '1 a hint, 2 clear, 3 strong and specific (numbers, sell-outs, waitlists, many reviews)' },
+          finding: { type: 'string', description: 'One plain sentence: what this shows' },
+          url: { type: 'string' },
+          quote: { type: 'string', description: 'Exact words from the page' },
+        },
+        required: ['scope', 'kind', 'direction', 'strength', 'finding', 'url', 'quote'],
+      },
+      async run(input: Omit<DemandSignal, 'host'> & { quote: string }, c) {
+        const scope = input.scope as DemandScope;
+        if (!kindsFor(scope).includes(input.kind as DemandKind)) throw new ToolError(`${input.kind} is not a ${scope} signal. Use one of: ${kindsFor(scope).join(', ')}.`);
+        if (!(await confirmQuote(c as unknown as AgentContext, input.url, input.quote))) throw new ToolError('That quote is not on the page. Copy it exactly.');
+        const list = ((c.scratch.demand_signals ??= []) as DemandSignal[]);
+        if (list.some((x) => x.url === input.url && x.kind === input.kind)) return 'Already recorded from that page.';
+        const strength = Math.max(1, Math.min(3, Math.round(Number(input.strength)))) as 1 | 2 | 3;
+        list.push({ scope, kind: input.kind, direction: input.direction === 'against' ? 'against' : 'for', strength, finding: String(input.finding).slice(0, 400), url: input.url, host: hostOf(input.url) });
+        return { recorded: list.length, market: list.filter((x) => x.scope === 'market').length, area: list.filter((x) => x.scope === 'area').length };
+      },
+    };
+
+    const assessDemand: AgentTool<AnalystParams> = {
+      name: 'assess_demand',
+      description: 'Score demand pull from the signals you recorded (computed by code: market, area, overall 0-10, with confidence by number of independent sources). Call it after your last signal.',
+      input_schema: { type: 'object', properties: {} },
+      async run(_input, c) {
+        const signals = (c.scratch.demand_signals ?? []) as DemandSignal[];
+        c.scratch.demand_assessed = signals.length;
+        const pull = demandPull(signals);
+        return { ...pull, note: pull.area.confidence === 'low' ? 'Area evidence comes from one source or less; look for one more independent source if you can.' : undefined };
+      },
+    };
+
+    const tools: AgentTool<AnalystParams>[] = [runModel, webSearch, fetchPage, record, commit, recordCompetitor, commitCompetition, recordDemand, assessDemand];
     if (Deno.env.get('GOOGLE_MAPS_API_KEY')) tools.push(findPlaces);
     return tools;
   },
@@ -181,23 +230,52 @@ export const pairingAnalyst: AgentDef<AnalystParams> = {
         cheapest_validation: { type: 'array', items: { type: 'string' } },
         what_would_change_my_mind: { type: 'string' },
         research_summary: { type: 'string', description: 'What you researched, what changed, and what is still guessed' },
+        demand: {
+          type: 'object',
+          description: 'Demand pull in words; the scores come from assess_demand',
+          properties: {
+            market_summary: { type: 'string', description: 'Two or three sentences: is this kind of business wanted, and is that growing?' },
+            area_summary: { type: 'string', description: 'Two or three sentences: do people within reach of this place want it, and who exactly?' },
+            unknowns: { type: 'array', items: { type: 'string' }, description: 'What about demand is still not known' },
+          },
+          required: ['market_summary', 'area_summary', 'unknowns'],
+        },
       },
-      required: ['verdict', 'headline', 'risks', 'kill_criteria', 'cheapest_validation', 'what_would_change_my_mind', 'research_summary'],
+      required: ['verdict', 'headline', 'risks', 'kill_criteria', 'cheapest_validation', 'what_would_change_my_mind', 'research_summary', 'demand'],
     },
   },
+  checkFinish(ctx) {
+    return demandGaps((ctx.scratch.demand_signals ?? []) as DemandSignal[], ctx.scratch.demand_assessed as number | undefined);
+  },
   async onFinish(ctx, result) {
-    return await analyzePairing(ctx.run, ctx.params.pairing_id, {
+    const { demand, ...memo } = result as Record<string, unknown> & { demand?: Record<string, unknown> };
+    const pull = demandOf(ctx, demand ?? {});
+    const out = await analyzePairing(ctx.run, ctx.params.pairing_id, {
       research: false,
       verify: true,
       verifyInBackground: true,
-      extras: { memo: { ...result, by: 'pairing-analyst', at: new Date().toISOString() }, research: research(ctx) },
+      extras: { memo: { ...memo, by: 'pairing-analyst', at: new Date().toISOString() }, research: research(ctx), demand: pull },
     });
+    await saveDemandScore(ctx.params.pairing_id, pull);
+    return out;
   },
   async onStop(ctx, reason) {
     // Out of budget or turns: still store the analysis with whatever was researched, unverified.
-    return await analyzePairing(ctx.run, ctx.params.pairing_id, { research: false, verify: false, extras: { research: { ...research(ctx), stopped: reason } } });
+    const pull = demandOf(ctx);
+    const out = await analyzePairing(ctx.run, ctx.params.pairing_id, { research: false, verify: false, extras: { research: { ...research(ctx), stopped: reason }, demand: pull } });
+    await saveDemandScore(ctx.params.pairing_id, pull);
+    return out;
   },
 };
+
+/** Keep the demand score with the idea, so the next screening scores demand for this place, not just the niche. */
+async function saveDemandScore(pairingId: string, pull: ReturnType<typeof demandOf>) {
+  if (!pull || pull.level === 'unclear') return;
+  const p = must(await db().from('pairings').select('scores,niche_id,location_id').eq('id', pairingId).single(), 'pairing');
+  const demand_pull = { overall: pull.overall, level: pull.level, market: pull.market.score, area: pull.area.score, at: new Date().toISOString() };
+  await db().from('pairings').update({ scores: { ...(p.scores ?? {}), demand_pull } }).eq('id', pairingId);
+  await db().rpc('queue_fit_screen', { p_niche: p.niche_id, p_location: p.location_id });
+}
 
 function definitionFor(key: string): string {
   if (key.startsWith('price.')) return 'Price per unit sold for this stream at comparable businesses near this place (USD)';

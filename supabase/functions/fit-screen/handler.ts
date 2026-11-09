@@ -63,6 +63,12 @@ export async function run(body: Record<string, unknown>) {
         const site = checkFor(niche.id, location.id);
         if (site?.verdict === 'no') reasons.push(`site: ${site.reason}`);
 
+        const existing = must(
+          await db().from('pairings').select('id,status,scores').eq('niche_id', niche.id).eq('location_id', location.id).eq('profile_id', profile.id).maybeSingle(),
+          'pairing lookup',
+        );
+        // Demand pull researched for this idea in this place outranks the niche's general demand score.
+        const demandPull = existing?.scores?.demand_pull;
         let row: Record<string, unknown> = { niche_id: niche.id, location_id: location.id, profile_id: profile.id, hard_filter_reasons: reasons };
         if (reasons.length) {
           row = { ...row, status: 'screened_out', scores: { niche_status: niche.status }, score_total: null, rough_profit_year3: null };
@@ -76,7 +82,7 @@ export async function run(body: Record<string, unknown>) {
               target,
               targetYear,
               basis,
-              nicheDemand: typeof card.demand_score === 'number' ? card.demand_score : null,
+              nicheDemand: typeof demandPull?.overall === 'number' ? demandPull.overall : typeof card.demand_score === 'number' ? card.demand_score : null,
               signalScore: Number(niche.signal_score ?? 0),
               placeFit: typeof location.fit?.score === 'number' ? location.fit.score : null,
               visaRoute: params.visa?.[location.country_code],
@@ -91,6 +97,7 @@ export async function run(body: Record<string, unknown>) {
             status: 'candidate',
             scores: {
               parts: s.parts,
+              demand_pull: demandPull ?? null,
               niche_status: niche.status,
               tenure: best.tenure,
               basis,
@@ -114,10 +121,6 @@ export async function run(body: Record<string, unknown>) {
           };
         }
         // Keep decisions the owner already made.
-        const existing = must(
-          await db().from('pairings').select('id,status').eq('niche_id', niche.id).eq('location_id', location.id).eq('profile_id', profile.id).maybeSingle(),
-          'pairing lookup',
-        );
         if (existing && ['approved', 'analyzed', 'verified', 'rejected'].includes(existing.status)) delete row.status;
         const saved = must(
           await db().from('pairings').upsert(row, { onConflict: 'niche_id,location_id,profile_id' }).select('id,status,score_total').single(),

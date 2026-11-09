@@ -64,6 +64,8 @@ export interface AgentDef<P = Record<string, unknown>> {
   /** The opening message: what to do this time. */
   task(ctx: AgentContext<P>): Promise<string>;
   finish: { description: string; schema: JsonSchema };
+  /** A rule the finish call must meet beyond its schema: return what is still to do, or null to accept. */
+  checkFinish?(ctx: AgentContext<P>, result: Record<string, unknown>): string | null;
   /** Runs once after a valid finish call: store results, start follow-up work. */
   onFinish(ctx: AgentContext<P>, result: Record<string, unknown>): Promise<unknown>;
   /** Runs when the session stops without finishing (budget, limits): salvage what can be saved. */
@@ -232,9 +234,13 @@ export async function runSlice<P extends Record<string, unknown>>(def: AgentDef<
         let ok = true;
         if (u.name === 'finish') {
           const missing = (def.finish.schema.required ?? []).filter((k) => u.input?.[k] === undefined);
+          const unmet = missing.length ? null : (def.checkFinish?.(ctx, u.input ?? {}) ?? null);
           if (missing.length) {
             ok = false;
             out = `finish is missing: ${missing.join(', ')}. Call finish again with every field.`;
+          } else if (unmet) {
+            ok = false;
+            out = `Not yet: ${unmet}`;
           } else {
             ctx.finished = u.input;
             out = 'Recorded.';

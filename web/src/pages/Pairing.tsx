@@ -7,7 +7,7 @@ import { computeLive, loadLive } from '../live.ts';
 import { AnalystPanel } from '../agents.tsx';
 import type { Candidate } from '../../../supabase/functions/_shared/evaluate.ts';
 import { cashWithHome, featuresFor, ideaChecks, inputUse, type Tenure } from '../../../supabase/functions/_shared/concept.ts';
-import { Block, ConceptBlock, FeaturesBlock, Fold, Kpi, OwnBlock, PageNav, PlanPicker, RangeBars, ScoreParts, TENURE_NAME, Warnings } from '../idea.tsx';
+import { Block, ConceptBlock, DemandBlock, FeaturesBlock, Fold, Kpi, OwnBlock, PageNav, PlanPicker, RangeBars, ScoreParts, TENURE_NAME, Warnings } from '../idea.tsx';
 
 const scale = (t: Tri, k: number): Tri => ({ low: t.low * k, mode: t.mode * k, high: t.high * k });
 const capOcc = (t: Tri, k: number): Tri => ({ low: Math.min(0.95, t.low * k), mode: Math.min(0.95, t.mode * k), high: Math.min(0.95, t.high * k) });
@@ -227,6 +227,7 @@ export function PairingPage({ id }: { id: string }) {
           ['concept', 'The business'],
           ['own', "What you'd own"],
           ['features', 'Guest features'],
+          ['demand', 'Demand pull'],
           ['plan', 'Ownership plan'],
           ['money', 'Money'],
           ['risks', 'Risks & tests'],
@@ -270,6 +271,10 @@ export function PairingPage({ id }: { id: string }) {
           <FeaturesBlock features={features} />
         </Block>
       )}
+
+      <Block id="demand" title="Demand pull" aside={fromStore && storedR?.demand ? 'Researched by the analyst, scored by code from the evidence' : undefined}>
+        <DemandBlock demand={fromStore ? storedR?.demand : null} nicheScore={card.demand_score} nicheEvidence={card.demand_evidence} />
+      </Block>
 
       {plans.length > 0 && (
         <Block id="plan" title="Ownership plan" aside={fromStore ? 'Full analysis of this plan' : 'Live estimate for this plan'}>
