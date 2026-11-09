@@ -32,6 +32,7 @@ const ITEMS: Item[] = [
   { section: 'Money and work', label: 'Seller financing abroad', hint: 'loan seller owner financing colombia costa rica el salvador land' },
   { section: 'Money and work', label: 'Live on site', hint: 'home house residence living' },
   { section: 'Money and work', label: 'My housing cost today (USD/month)', hint: 'rent mortgage housing living' },
+  { section: 'Money and work', label: 'Cost to build my home on the land (USD)', hint: 'house home a-frame build own land live on site' },
   { section: 'Money and work', label: "Hours a month I'll work on site", hint: 'workload time owner' },
   { section: 'Money and work', label: 'Who runs it', hint: 'staff team solo help' },
   ...Object.values(WEIGHT_LABELS).map((label) => ({ section: 'How ideas are scored', label, hint: 'weight score ranking' })),
@@ -186,6 +187,13 @@ export function Settings() {
             My housing cost today (USD/month)
             <input type="number" min={0} value={p.housing_cost_usd ?? 0} onChange={(e) => set('housing_cost_usd', Number(e.target.value))} />
             <small className="muted">Rent or mortgage you'd stop paying. Lenders count it when you live on site; it can also count toward your target (above).</small>
+          </label>
+          )}
+          {vis('Cost to build my home on the land (USD)') && (
+          <label>
+            Cost to build my home on the land (USD)
+            <input type="number" min={0} value={p.home_build_usd ?? 0} onChange={(e) => set('home_build_usd', Number(e.target.value))} />
+            <small className="muted">Your own house when you buy land and live on site. Kept apart from the business: shown as your cash including the home.</small>
           </label>
           )}
         </div>

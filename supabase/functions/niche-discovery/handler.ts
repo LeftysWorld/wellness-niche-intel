@@ -5,16 +5,19 @@
 //     niche in front of the owner.
 //   mode=brainstorm: search broadly for land-based wellness concepts and add
 //     any not already in the library as proposed niches.
+//   mode=concept: for one niche_id, write only the plain description of the
+//     business (guest visit, what the owner builds, what guests get).
 import { db, getSetting, must, type Budgets, type Models } from '../_shared/db.ts';
 import { ask, clip } from '../_shared/llm.ts';
 import { buildModel, mergeLedger, type CostTemplate, type NicheModelSpec } from '../_shared/model-builder.ts';
 import { analyze } from '../_shared/engine/index.ts';
 import { withRun, type Run } from '../_shared/runs.ts';
-import { DESCRIBE_SCHEMA, ECONOMICS_SCHEMA, obj, str, strs, toModelAndTemplate, type Describe, type Economics } from '../_shared/niche-schemas.ts';
+import { CONCEPT_SCHEMA, DESCRIBE_SCHEMA, ECONOMICS_SCHEMA, obj, str, strs, toModelAndTemplate, type Describe, type Economics } from '../_shared/niche-schemas.ts';
 import { search } from '../_shared/search.ts';
 import { agentSettings, startAgent } from '../_shared/agent.ts';
 import { nicheScout } from '../_shared/agents/index.ts';
 import { displayName } from '../_shared/niche-intake.ts';
+import type { Concept } from '../_shared/concept.ts';
 
 /** Run the drafted card through the engine with a neutral US ledger to catch broken drafts. */
 function smokeTest(model: NicheModelSpec, template: CostTemplate): string[] {
@@ -145,6 +148,8 @@ ${design.text}` : '',
     smoke_test: problems,
   };
   await db().from('niches').update({ card, risk_tags: risk_tags ?? [] }).eq('id', nicheId);
+  // The plain description of the business, tied to the offers just priced.
+  await draftConcept(run, models, nicheId).catch(() => null);
   if (!problems.length) {
     const last = must(await db().from('cost_templates').select('version').eq('niche_id', nicheId).order('version', { ascending: false }).limit(1).maybeSingle(), 'template version');
     await db().from('cost_templates').insert({ niche_id: nicheId, version: (last?.version ?? 0) + 1, template, notes: `Drafted by run ${run.id}` });
@@ -160,6 +165,41 @@ ${design.text}` : '',
     payload: { risk_tags, streams: model.streams?.map((s) => s.label), review: review.verdict, concerns: review.concerns },
   });
   return { niche: niche.slug, ok: problems.length === 0, problems, examplesAdded, review: review.verdict };
+}
+
+/**
+ * The plain description of the business: what a guest's visit looks like, what
+ * the owner builds and owns, and what guests get. Features are tied to the
+ * money model's offers by key, so the page can show which ones are priced.
+ */
+export async function draftConcept(run: Run, models: Models, nicheId: string, context?: string): Promise<Concept> {
+  // deno-lint-ignore no-explicit-any
+  const niche = must(await db().from('niches').select('name,card').eq('id', nicheId).single(), 'niche') as { name: string; card: Record<string, any> };
+  const card = niche.card ?? {};
+  const streams: { key: string; label: string; price?: { mode: number } }[] = card.model?.streams ?? [];
+  const facts = context ?? [
+    `Niche: ${niche.name}`,
+    card.summary || card.description ? `Write-up: ${clip(String(card.summary ?? card.description), 800)}` : '',
+    card.structures ? `Structures: ${clip(String(card.structures), 600)}` : '',
+    card.price_model ? `Prices: ${clip(String(card.price_model), 400)}` : '',
+    card.staffing ? `Staffing: ${clip(String(card.staffing), 300)}` : '',
+    (card.prerequisites ?? []).length ? `Site must have: ${card.prerequisites.join('; ')}` : '',
+    (card.examples ?? []).length ? `Examples: ${card.examples.join(', ')}` : '',
+  ].filter(Boolean).join('\n');
+  const offers = streams.map((s) => `- key "${s.key}": ${s.label}${s.price ? ` (about $${Math.round(s.price.mode)})` : ''}`).join('\n') || '(none priced yet)';
+  const concept = await ask<Concept>({
+    run,
+    model: models.judgment,
+    system:
+      'You explain small wellness businesses in plain words to an owner deciding whether to build one on land they buy. Describe the complete business as the best operators of this kind run it, not a single amenity: what a guest does from arrival to leaving, the facilities that make the visit worth the price, and the add-ons that bring in more money. Be concrete. Do not invent prices; say how each feature earns instead.',
+    prompt: `${facts}\n\nOffers already priced in the money model:\n${offers}\n\nDescribe this business. List every priced offer as a feature with its stream_key, then the features that would make it a complete business of its kind, with an empty stream_key.`,
+    tool: { name: 'business_concept', description: 'A plain description of the business', schema: CONCEPT_SCHEMA },
+    maxTokens: 4000,
+  });
+  const out: Concept = { ...concept, drafted_by: models.judgment, drafted_at: new Date().toISOString() };
+  const latest = must(await db().from('niches').select('card').eq('id', nicheId).single(), 'niche') as { card: Record<string, unknown> };
+  await db().from('niches').update({ card: { ...(latest.card ?? {}), concept: out } }).eq('id', nicheId);
+  return out;
 }
 
 async function brainstorm(run: Run, models: Models) {
@@ -219,6 +259,10 @@ export async function run(body: Record<string, unknown>) {
   const models = await getSetting<Models>('models');
   return withRun('niche_discovery', { tokenBudget: budgets.niche_discovery_tokens, searchBudget: 40, subjectId: body.niche_id as string | undefined, input: body }, async (run) => {
     if (body.mode === 'brainstorm') return await brainstorm(run, models);
+    if (body.mode === 'concept') {
+      if (!body.niche_id) throw new Error('mode=concept needs niche_id');
+      return { concept: await draftConcept(run, models, String(body.niche_id)) };
+    }
     let ids: string[];
     if (body.niche_id) ids = [String(body.niche_id)];
     else {

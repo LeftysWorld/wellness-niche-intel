@@ -32,6 +32,26 @@ export const DESCRIBE_SCHEMA = obj({
   },
 });
 
+/** What the business is, in plain terms: the guest's visit, what the owner builds, what guests get. */
+export const CONCEPT_SCHEMA = obj({
+  pitch: { ...str, description: 'One sentence a friend would understand: what the business is and where guests spend their time' },
+  overview: { ...str, description: 'Two or three sentences: how a visit works and how the business makes money. Say whether guests stay overnight.' },
+  who: { ...str, description: 'Who the customers are, in one short line' },
+  journey: { type: 'array', description: '4 to 6 steps of a typical guest visit, in order', items: obj({ title: str, text: str }) },
+  assets: { type: 'array', description: 'Physical things the owner builds or buys (land, buildings, equipment, utilities), 5 to 10 items', items: obj({ name: str, note: str }) },
+  features: {
+    type: 'array',
+    description: 'What guests get, 5 to 10 items: every priced offer, plus the facilities and add-ons that make this a complete business of its kind rather than a single amenity',
+    items: obj({
+      name: str,
+      what: { ...str, description: 'One sentence' },
+      earns: { ...str, description: 'How it makes money, e.g. "$35 a visit", "included; lifts ticket price", "commission per massage"' },
+      needs: { ...str, description: 'What it takes to offer it' },
+      stream_key: { ...str, description: 'The key of the priced offer this feature is, from the list given; empty when it is not one of them' },
+    }),
+  },
+});
+
 export const ECONOMICS_SCHEMA = obj({
   ownerFixedHours: { ...num, description: 'Admin, marketing, bookings and upkeep hours per month' },
   openHoursPerMonth: { ...num, description: 'Hours per month someone must be on site because the business is open (e.g. 6 days x 8 hours = 208); 0 if guests self-serve' },
