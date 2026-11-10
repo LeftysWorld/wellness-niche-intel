@@ -73,7 +73,7 @@ export async function run(body: Record<string, unknown>) {
         if (reasons.length) {
           row = { ...row, status: 'screened_out', scores: { niche_status: niche.status }, score_total: null, rough_profit_year3: null };
         } else {
-          const [best] = await evaluate(niche, location, profile, { simulations: 300, sensitivity: false });
+          const [best] = await evaluate(niche, location, profile, { simulations: 300, sensitivity: false, pairingId: existing?.id });
           const r = best.result;
           const s = scoreIdea(
             {
