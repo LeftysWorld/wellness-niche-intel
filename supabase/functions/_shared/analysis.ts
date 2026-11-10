@@ -3,6 +3,7 @@
 //     the ledger with sources, scoped to this pairing).
 //  2. Build the model from the ledger and run the full simulation (code).
 //  3. Store the result and hand it to the verifier.
+import { jsonSafe } from './json-safe.ts';
 import { db, getSetting, must, type Models, type Thresholds } from './db.ts';
 import { HttpError } from './http.ts';
 import { writeAssumptions, type LocationRow, type NewAssumption } from './ledger.ts';
@@ -130,7 +131,7 @@ export async function analyzePairing(
         run_id: run.id,
         pairing_id: pairingId,
         model: best.build.model,
-        result: {
+        result: jsonSafe({
           ...best.result,
           tenure: best.tenure,
           evidence: ev,
@@ -138,7 +139,7 @@ export async function analyzePairing(
           weakInputs: best.build.weakInputs,
           ...(opts.extras ?? {}),
           alternative: alt ? { tenure: alt.tenure, year1: alt.result.year1, year3: alt.result.year3, year5: alt.result.year5, startup: alt.result.startup.total, fundable: alt.result.startup.fundable } : null,
-        },
+        }),
         assumption_ids: best.build.usedAssumptionIds,
         confidence,
         verifier_status: 'pending',

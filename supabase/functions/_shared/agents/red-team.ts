@@ -11,6 +11,7 @@ import { termsProblem, type PriceTerms } from '../price-terms.ts';
 import { db, must } from '../db.ts';
 import { hostOf, quoteHasNumber } from '../evidence.ts';
 import { PRICE_UNITS } from '../model-builder.ts';
+import { jsonSafe } from '../json-safe.ts';
 import { compareChecks, lowerConfidence, redTeamTargets, type RedTeamCheck, type RedTeamTarget } from '../red-team.ts';
 import type { BusinessModel } from '../engine/types.ts';
 
@@ -127,6 +128,6 @@ async function save(ctx: Ctx, findings: ReturnType<typeof compareChecks>, summar
   const red_team = { findings, summary, not_checked: notChecked, at: new Date().toISOString(), session_id: ctx.sessionId };
   await db()
     .from('analysis_results')
-    .update({ result: { ...(ar.result ?? {}), red_team }, confidence: lowerConfidence(ar.confidence, findings) })
+    .update({ result: jsonSafe({ ...(ar.result ?? {}), red_team }), confidence: lowerConfidence(ar.confidence, findings) })
     .eq('id', ctx.params.result_id);
 }

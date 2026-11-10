@@ -65,7 +65,8 @@ export const fetchPage: AgentTool = {
     if (!/^https?:\/\//i.test(url)) throw new ToolError('Give a full http(s) URL.');
     const item = await readPage(ctx, url);
     if (!item.text) return 'Could not read this page (blocked, not text, or empty). Use the search snippet, or try another source.';
-    const terms = (input.find ?? []).filter(Boolean);
+    // The model sometimes sends one term as a string instead of a list.
+    const terms = (Array.isArray(input.find) ? input.find : input.find ? [input.find] : []).map(String).filter(Boolean);
     if (terms.length) {
       const w = windows(item.text, terms);
       return w.length ? { url, passages: w } : { url, passages: [], note: `None of ${terms.join(', ')} found. Page starts: ${item.text.slice(0, 1200)}` };

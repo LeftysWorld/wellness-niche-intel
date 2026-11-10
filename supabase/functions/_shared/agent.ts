@@ -13,6 +13,7 @@ import { messages as turn, clip, type JsonSchema } from './llm.ts';
 import { appendUser, compact, type ContentBlock, type Message } from './history.ts';
 import { BudgetExceeded, finishRun, loadRun, saveProgress, startRun, type Run } from './runs.ts';
 import type { EvidenceStore } from './evidence.ts';
+import { jsonSafe } from './json-safe.ts';
 import { PLAYBOOKS } from './playbooks.ts';
 
 /** Thrown by a tool to tell the agent what was wrong with its call (it sees the message and can fix it). */
@@ -171,14 +172,16 @@ export async function runSlice<P extends Record<string, unknown>>(def: AgentDef<
   const deadline = Date.now() + settings.slice_seconds * 1000;
 
   const save = async (status: string, extra: Record<string, unknown> = {}) => {
-    await db()
+    // A failed save would leave the session marked running with no one to resume it: surface it.
+    const { error } = await db()
       .from('agent_sessions')
-      .update({ messages: compact(history), scratch: ctx.scratch, turns, status, updated_at: new Date().toISOString(), ...extra })
+      .update(jsonSafe({ messages: compact(history), scratch: ctx.scratch, turns, status, updated_at: new Date().toISOString(), ...extra }))
       .eq('id', sessionId);
+    if (error) throw new Error(`Could not save agent session: ${error.message}`);
     await saveProgress(run);
   };
   const step = (row: { tool?: string | null; input?: unknown; output?: string; ok?: boolean; tokens?: number }) =>
-    db().from('agent_steps').insert({ session_id: sessionId, turn: turns, tool: row.tool ?? null, input: row.input ?? null, output: clip(row.output ?? '', 4000), ok: row.ok ?? true, tokens: row.tokens ?? 0 });
+    db().from('agent_steps').insert(jsonSafe({ session_id: sessionId, turn: turns, tool: row.tool ?? null, input: row.input ?? null, output: clip(row.output ?? '', 4000), ok: row.ok ?? true, tokens: row.tokens ?? 0 }));
 
   const stop = async (status: 'failed' | 'budget_exceeded', reason: string) => {
     let salvage: unknown = null;

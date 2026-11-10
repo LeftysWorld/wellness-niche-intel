@@ -162,3 +162,13 @@ function minimalEconomics() {
     exit: { sdeMultiple: { low: 1, mode: 2, high: 3 }, ebitdaMultiple: { low: 3, mode: 4, high: 5 }, managerWageMultiple: 1.5 }, land_acres: 3, startup_items: [],
   };
 }
+
+test('text Postgres cannot store is cleaned before saving', async () => {
+  const { jsonSafe, cleanText } = await import('../supabase/functions/_shared/json-safe.ts');
+  assert.equal(cleanText('a\u0000b'), 'ab');
+  assert.equal(cleanText('x\uD83Dy'), 'xy', 'lone high surrogate');
+  assert.equal(cleanText('ok 😀'), 'ok 😀', 'a whole emoji survives');
+  const out = jsonSafe({ m: [{ t: 'p\u0000' }], n: 3, k: null, ['bad\u0000key']: 'v' });
+  assert.deepEqual(out, { m: [{ t: 'p' }], n: 3, k: null, badkey: 'v' });
+  assert.doesNotMatch(JSON.stringify(out), /\\u0000/);
+});
