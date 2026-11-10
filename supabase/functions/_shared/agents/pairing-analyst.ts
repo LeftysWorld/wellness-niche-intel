@@ -7,7 +7,7 @@ import { ToolError, type AgentContext, type AgentDef, type AgentTool } from '../
 import { confirmQuote, fetchPage, figureTools, webSearch } from '../agent-tools.ts';
 import { analyzePairing } from '../analysis.ts';
 import { db, must } from '../db.ts';
-import { capitalDrivers, driverKeys, PAIRING_KEY, uncertaintyBand } from '../drivers.ts';
+import { capitalDrivers, capitalGap, capitalRequirement, driverKeys, PAIRING_KEY, uncertaintyBand } from '../drivers.ts';
 import { capexKeyFor, PRICE_UNITS } from '../model-builder.ts';
 import { isOfficialHost, RULE_TOPICS, rulesGap, type RuleRecord } from '../rules.ts';
 import { hostOf } from '../evidence.ts';
@@ -74,6 +74,9 @@ export const pairingAnalyst: AgentDef<AnalystParams> = {
         const spec = niche.card.model as NicheModelSpec;
         const drivers = driverKeys(best.build.model, r.sensitivity, { tenure: best.tenure, siteType: spec.siteType, evidence: best.build.evidence });
         const band = uncertaintyBand(r.year3.takeHome);
+        const capital = capitalDrivers(best.build.model, { evidence: best.build.evidence, capexKey: capexKeyFor });
+        // The three biggest start-up lines must each be researched (or given up on, with what was tried) before finishing.
+        c.scratch.capital_required ??= capitalRequirement(capital);
         const rounds = ((c.scratch.rounds ??= []) as unknown[]);
         rounds.push({ at: new Date().toISOString(), band, year1: r.year1.takeHome.p50, year3: r.year3.takeHome.p50, startup: r.startup.total.p50, fundable: r.startup.fundable, sourcedShare: best.build.evidence.sourcedShare });
         return {
@@ -91,7 +94,8 @@ export const pairingAnalyst: AgentDef<AnalystParams> = {
           evidence: { sourced_share: best.build.evidence.sourcedShare, niche_economics_guessed: best.build.evidence.nicheGuessed, missing: best.build.evidence.missing },
           top_drivers: drivers.slice(0, 6).map((d) => ({ ...d, definition: d.key ? (KEY_GUIDE[d.key] ?? definitionFor(d.key)) : 'part of the niche\'s own economics (not researched per idea)' })),
           streams: best.build.model.streams.map((s) => ({ key: s.key, label: s.label, market: s.market, price_unit: spec.streams.find((x) => x.key === s.key)?.priceUnit ?? 'not set', price_mode: s.price.mode, mature_occupancy_mode: s.matureOccupancy.mode, units: s.units })),
-          top_capital_drivers: capitalDrivers(best.build.model, { evidence: best.build.evidence, capexKey: capexKeyFor }).slice(0, 6),
+          top_capital_drivers: capital.slice(0, 6),
+          capital_to_research: c.scratch.capital_required,
           land_acres: best.build.model.startupCosts.find((l) => l.key === 'land')?.label ?? null,
           site_needs: (niche.card as Record<string, unknown>).prerequisites ?? [],
           warnings: r.warnings,
@@ -296,6 +300,7 @@ export const pairingAnalyst: AgentDef<AnalystParams> = {
   },
   checkFinish(ctx) {
     return (
+      capitalGap((ctx.scratch.capital_required ?? []) as string[], (ctx.scratch.committed ?? {}) as Record<string, unknown>, (ctx.scratch.gave_up ?? {}) as Record<string, unknown>) ??
       demandGaps((ctx.scratch.demand_signals ?? []) as DemandSignal[], ctx.scratch.demand_assessed as number | undefined) ??
       rulesGap(Boolean(ctx.scratch.needs_permits), (ctx.scratch.rules ?? []) as RuleRecord[])
     );

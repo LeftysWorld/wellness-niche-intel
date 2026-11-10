@@ -101,3 +101,15 @@ export function driverKeys(
 export function uncertaintyBand(p: { p10: number; p50: number; p90: number }): number {
   return Math.round(((p.p90 - p.p10) / Math.max(Math.abs(p.p50), 500)) * 100) / 100;
 }
+
+/** Keys the analyst must research before finishing: for the three biggest start-up lines, each key not yet sourced. */
+export function capitalRequirement(drivers: CapitalDriver[]): string[] {
+  return [...new Set(drivers.slice(0, 3).flatMap((d) => d.keys.filter((k) => k.status !== 'sourced').map((k) => k.key)))];
+}
+
+/** What is left of the capital research: every required key committed, or given up with what was tried. */
+export function capitalGap(required: string[], committed: Record<string, unknown>, gaveUp: Record<string, unknown>): string | null {
+  const left = required.filter((k) => !(k in committed) && !(k in gaveUp));
+  if (!left.length) return null;
+  return `Research the biggest start-up costs first: commit ${left.join(', ')} with record_figure and commit_value (or give_up with what you tried). They decide the cash needed and the loan.`;
+}

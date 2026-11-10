@@ -172,3 +172,17 @@ test('text Postgres cannot store is cleaned before saving', async () => {
   assert.deepEqual(out, { m: [{ t: 'p' }], n: 3, k: null, badkey: 'v' });
   assert.doesNotMatch(JSON.stringify(out), /\\u0000/);
 });
+
+test('the analyst must research the three biggest start-up lines before finishing', async () => {
+  const { capitalGap, capitalRequirement } = await import('../supabase/functions/_shared/drivers.ts');
+  const drivers = [
+    { line: 'Land (4 acres)', usd: 95000, keys: [{ key: 'land.price_per_acre_usd', scope: 'place' as const, status: 'sourced' as const }, { key: 'site.acres', scope: 'pairing' as const, status: 'guessed' as const }] },
+    { line: 'Site work', usd: 50000, keys: [{ key: 'capex.site_work_usd', scope: 'pairing' as const, status: 'guessed' as const }] },
+    { line: 'Changing rooms', usd: 45000, keys: [{ key: 'capex.changing_usd', scope: 'pairing' as const, status: 'guessed' as const }] },
+    { line: 'Saunas', usd: 44000, keys: [{ key: 'capex.saunas_usd', scope: 'pairing' as const, status: 'guessed' as const }] },
+  ];
+  const req = capitalRequirement(drivers);
+  assert.deepEqual(req, ['site.acres', 'capex.site_work_usd', 'capex.changing_usd']);
+  assert.match(capitalGap(req, {}, {})!, /capex.changing_usd/);
+  assert.equal(capitalGap(req, { 'site.acres': {}, 'capex.site_work_usd': {} }, { 'capex.changing_usd': 'no quotes' }), null);
+});
