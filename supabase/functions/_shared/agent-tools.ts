@@ -97,7 +97,12 @@ export interface Figure {
   fit: 'exact' | 'close';
   part?: string;
   note?: string;
+  /** For prices: what exactly the price buys. */
+  terms?: PriceTerms;
 }
+
+export { termsProblem, type PriceTerms } from './price-terms.ts';
+import { termsProblem, type PriceTerms } from './price-terms.ts';
 
 export interface FigureRules {
   /** Allowed keys, with a plausible range when known. */
@@ -108,6 +113,8 @@ export interface FigureRules {
   agent: string;
   /** Evaluation runs record what would be written without writing it. */
   dryRun?: boolean;
+  /** For price keys: the unit the model prices the offer in. Return null for keys that are not prices. */
+  terms?(key: string): { unit?: string; units: readonly string[] } | null;
 }
 
 function figures(ctx: Ctx): Record<string, Figure[]> {
@@ -130,6 +137,17 @@ export function figureTools(rules: FigureRules): AgentTool[] {
         fit: { type: 'string', enum: ['exact', 'close', 'proxy'], description: 'exact: this value for this place; close: same measure, nearby place or slightly different type; proxy: a different measure' },
         part: { type: 'string', description: 'Only for totals made of parts (population by town): the town' },
         note: { type: 'string', description: 'Conversion and any difference from what was asked' },
+        terms: {
+          type: 'object',
+          description: 'Required for prices: what the price buys, as the page states it',
+          properties: {
+            product: { type: 'string', description: 'The product or room name exactly as the page shows it, e.g. "Sauna Cabana"' },
+            unit: { type: 'string', description: 'per_person, per_booking, per_night, per_month or per_unit' },
+            party_size: { type: 'number', description: 'Most people one booking covers, when the page says' },
+            duration_minutes: { type: 'number', description: 'Length of the session, when the page says' },
+            seen: { type: 'string', description: 'Date the page shows for the price (YYYY-MM-DD) or "undated"' },
+          },
+        },
       },
       required: ['key', 'value', 'original', 'url', 'quote', 'fit'],
     },
@@ -148,9 +166,19 @@ export function figureTools(rules: FigureRules): AgentTool[] {
       }
       const ok = await confirmQuote(ctx, String(input.url), String(input.quote ?? ''));
       if (!ok) throw new ToolError('That quote is not on the page. Copy the words exactly as they appear (fetch_page with find shows the passage).');
+      const want = rules.terms?.(key) ?? null;
+      let terms: PriceTerms | undefined;
+      if (want) {
+        const t = (input as { terms?: Partial<PriceTerms> }).terms;
+        const problem = termsProblem(t, want);
+        if (problem) throw new ToolError(problem);
+        // The product must be named on the same page, so a price cannot be lifted from a different offer.
+        if (!(await confirmQuote(ctx, String(input.url), String(t!.product)))) throw new ToolError(`"${t!.product}" is not on that page. Use the product name exactly as the page shows it.`);
+        terms = { product: String(t!.product), unit: String(t!.unit), party_size: t!.party_size, duration_minutes: t!.duration_minutes, seen: String(t!.seen) };
+      }
       const list = (figures(ctx)[key] ??= []);
       if (list.some((f) => f.url === input.url && f.value === value && (f.part ?? '') === (input.part ?? ''))) return 'Already recorded.';
-      list.push({ value, url: String(input.url), quote: String(input.quote), original: String(input.original), fit: input.fit === 'exact' ? 'exact' : 'close', part: input.part?.trim().toLowerCase() || undefined, note: input.note });
+      list.push({ value, url: String(input.url), quote: String(input.quote), original: String(input.original), fit: input.fit === 'exact' ? 'exact' : 'close', part: input.part?.trim().toLowerCase() || undefined, note: input.note, terms });
       const sites = new Set(list.map((f) => hostOf(f.url))).size;
       return { recorded: true, key, figures: list.length, sites, values: list.map((f) => f.value) };
     },
@@ -197,7 +225,7 @@ export function figureTools(rules: FigureRules): AgentTool[] {
         unit: input.unit,
         currency: key.endsWith('_usd') || key.includes('_usd_') ? 'USD' : null,
         source_url: best.url,
-        source_note: `Median of ${c.kept.length} figure(s) from ${c.sources} site(s)${c.dropped.length ? `, ${c.dropped.length} outlier(s) dropped` : ''}${allClose ? ', all close stand-ins' : ''}. ${input.note} Sources: ${[...new Set(c.kept.map((o) => o.url))].slice(0, 6).join(' ')}`.slice(0, 2000),
+        source_note: `Median of ${c.kept.length} figure(s) from ${c.sources} site(s)${c.dropped.length ? `, ${c.dropped.length} outlier(s) dropped` : ''}${allClose ? ', all close stand-ins' : ''}. ${input.note}${termsNote(list)} Sources: ${[...new Set(c.kept.map((o) => o.url))].slice(0, 6).join(' ')}`.slice(0, 2000),
         confidence,
         stale_after: key.startsWith('lease') || key.startsWith('land') || key.startsWith('price.') ? '120 days' : key.startsWith('demand.population') ? '1095 days' : '365 days',
       };
@@ -220,6 +248,11 @@ export function figureTools(rules: FigureRules): AgentTool[] {
     },
   };
   return [record, commit, giveUp];
+}
+
+function termsNote(list: Figure[]): string {
+  const t = list.filter((f) => f.terms).map((f) => `${f.terms!.product} ${f.terms!.unit.replace('_', ' ')}${f.terms!.party_size ? `, up to ${f.terms!.party_size}` : ''}${f.terms!.duration_minutes ? `, ${f.terms!.duration_minutes} min` : ''} (${f.terms!.seen}): $${f.value}`);
+  return t.length ? ` Terms: ${t.join('; ')}.` : '';
 }
 
 async function currentValue(subjectType: string, subjectId: string | null, key: string): Promise<number | null> {

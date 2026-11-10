@@ -34,8 +34,15 @@ async function ledgerEval(run: Run) {
   const items: { id: string; value: number | null; range: [number, number] | null; written_by: string | null }[] = [];
   for (const e of ANSWER_KEY) {
     const loc = must(await db().from('locations').select('id').eq('slug', e.location).maybeSingle(), 'location');
-    const cur = loc
-      ? must(await db().from('current_assumptions').select('value_num,written_by').eq('subject_type', 'location').eq('subject_id', loc.id).eq('key', e.key).maybeSingle(), 'value')
+    // A value researched for one idea is graded on that idea's own value.
+    let subject: { type: string; id: string } | null = loc ? { type: 'location', id: loc.id } : null;
+    if (loc && e.niche) {
+      const n = must(await db().from('niches').select('id').eq('slug', e.niche).maybeSingle(), 'niche');
+      const p = n ? must(await db().from('pairings').select('id').eq('niche_id', n.id).eq('location_id', loc.id).limit(1).maybeSingle(), 'pairing') : null;
+      subject = p ? { type: 'pairing', id: p.id } : null;
+    }
+    const cur = subject
+      ? must(await db().from('current_assumptions').select('value_num,written_by').eq('subject_type', subject.type).eq('subject_id', subject.id).eq('key', e.key).maybeSingle(), 'value')
       : null;
     items.push({ id: e.id, value: cur?.value_num ?? null, range: rangeUsd(e, fx), written_by: cur?.written_by ?? null });
   }
@@ -163,7 +170,7 @@ async function analysisEval(run: Run) {
 async function queueLiveScout(count: number) {
   const last = must(await db().from('latest_evals').select('metric,created_at').eq('suite', 'scout_live'), 'last live') as { metric: string; created_at: string }[];
   const when = (id: string) => Date.parse(last.find((l) => l.metric === id)?.created_at ?? '1970-01-01');
-  const picked = [...ANSWER_KEY].sort((a, b) => when(a.id) - when(b.id)).slice(0, count);
+  const picked = ANSWER_KEY.filter((e) => !e.niche).sort((a, b) => when(a.id) - when(b.id)).slice(0, count);
   const byLocation = new Map<string, typeof picked>();
   for (const e of picked) byLocation.set(e.location, [...(byLocation.get(e.location) ?? []), e]);
   const started: unknown[] = [];

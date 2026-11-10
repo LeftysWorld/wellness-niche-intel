@@ -62,13 +62,18 @@ export const ECONOMICS_SCHEMA = obj({
   requiresPopulation: { type: 'boolean', description: 'true if most revenue is local day visits' },
   streams: {
     type: 'array',
-    items: obj({ key: str, label: str, market: { type: 'string', enum: ['local', 'destination'], description: 'local: people living within ~40 minutes; destination: travellers' }, units: num, sellablePerUnitPerMonth: num, price: tri, startOccupancy: tri, matureOccupancy: tri, monthsToMature: tri, ownerHoursPerSale: num }),
+    items: obj({ key: str, label: str, market: { type: 'string', enum: ['local', 'destination'], description: 'local: people living within ~40 minutes; destination: travellers' }, units: num, sellablePerUnitPerMonth: num, price: tri, startOccupancy: tri, matureOccupancy: tri, monthsToMature: tri, ownerHoursPerSale: num, priceUnit: { type: 'string', enum: ['per_person', 'per_booking', 'per_night', 'per_month', 'per_unit'], description: 'What one price buys: per_person (a ticket), per_booking (a room or group, whatever the size), per_night, per_month (a membership)' } }),
+  },
+  seasonality: {
+    type: 'array',
+    items: num,
+    description: 'How busy this kind of business is in each month, January to December, around 1 (busiest about 1.3, quietest about 0.7). Think about the activity, not tourism in general: a sauna is busiest in winter, an outdoor pool in summer.',
   },
   perSale: { type: 'array', items: obj({ stream: str, usd: tri, scale: { type: 'string', enum: ['price', 'none'] } }) },
   fixed: { type: 'array', items: obj({ key: str, label: str, usd: tri, scale: { type: 'string', enum: ['price', 'none'] }, applies: { type: 'string', enum: ['own', 'lease', 'both'] } }) },
   staffing: { type: 'array', items: obj({ key: str, label: str, wageMultiple: tri, fromMonth: num }) },
   exit: obj({ sdeMultiple: tri, ebitdaMultiple: tri, managerWageMultiple: num }),
-  land_acres: num,
+  land_acres: { ...num, description: 'Acres the business really needs: buildings, parking, septic field, outdoor areas, and the owner\'s home when they live on site' },
   startup_items: {
     type: 'array',
     description: 'One-off costs. qty: count, or 0 when qtyFrom names a stream whose unit count sets it. leaseMonths: only for the lease deposit item (usd ignored), else 0.',
@@ -104,6 +109,7 @@ export function toModelAndTemplate(e: Economics): { model: NicheModelSpec; templ
     variablePct: e.variablePct,
     requiresPopulation: e.requiresPopulation,
     streams: e.streams,
+    ...(Array.isArray(e.seasonality) && e.seasonality.length === 12 ? { seasonality: e.seasonality } : {}),
     perSale: Object.fromEntries((e.perSale ?? []).map((p: { stream: string; usd: unknown; scale: string }) => [p.stream, { usd: p.usd, scale: p.scale }])),
     fixed: e.fixed,
     staffing: (e.staffing ?? []).map((s: { fromMonth: number }) => ({ ...s, fromMonth: Math.max(1, Math.round(s.fromMonth || 1)) })),

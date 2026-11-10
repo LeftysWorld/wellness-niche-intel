@@ -14,6 +14,7 @@ import { run as locationScout } from '../location-scout/handler.ts';
 import { run as nicheBuilder } from '../niche-builder/handler.ts';
 import { run as nicheDiscovery } from '../niche-discovery/handler.ts';
 import { run as orchestrator } from '../orchestrator/handler.ts';
+import { run as redTeam } from '../red-team/handler.ts';
 import { run as siteCheck } from '../site-check/handler.ts';
 import { run as verifier } from '../verifier/handler.ts';
 
@@ -31,6 +32,7 @@ const routes: Record<string, (body: Record<string, unknown>) => Promise<unknown>
   'niche-discovery': nicheDiscovery,
   orchestrator,
   'site-check': siteCheck,
+  'red-team': redTeam,
   verifier,
 };
 

@@ -4,6 +4,7 @@ import { backtestCollector } from './backtest-collector.ts';
 import { locationScout } from './location-scout.ts';
 import { nicheScout } from './niche-scout.ts';
 import { pairingAnalyst } from './pairing-analyst.ts';
+import { redTeam } from './red-team.ts';
 
 // deno-lint-ignore no-explicit-any
 export const AGENTS: Record<string, AgentDef<any>> = {
@@ -11,6 +12,7 @@ export const AGENTS: Record<string, AgentDef<any>> = {
   [pairingAnalyst.name]: pairingAnalyst,
   [nicheScout.name]: nicheScout,
   [backtestCollector.name]: backtestCollector,
+  [redTeam.name]: redTeam,
 };
 
-export { backtestCollector, locationScout, nicheScout, pairingAnalyst };
+export { backtestCollector, locationScout, nicheScout, pairingAnalyst, redTeam };

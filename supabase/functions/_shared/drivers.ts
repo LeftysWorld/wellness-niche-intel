@@ -21,8 +21,36 @@ export const LEASE_KEY_BY_SITE: Record<SiteType, string> = {
   estate: 'lease.estate_monthly_usd',
 };
 
-/** Keys researched for one idea only: comparable prices and occupancy. */
-export const PAIRING_KEY = /^(price\.[a-z0-9_]+_usd|occupancy\.[a-z0-9_]+\.(mature|start)|demand\.competitors_60min)$/;
+/** Keys researched for one idea only: comparable prices and occupancy, the lot size and each start-up cost line. */
+export const PAIRING_KEY = /^(price\.[a-z0-9_]+_usd|occupancy\.[a-z0-9_]+\.(mature|start)|demand\.competitors_60min|capex\.[a-z0-9_]+_usd|site\.acres)$/;
+
+export interface CapitalDriver {
+  line: string;
+  /** Most likely cost of the line (USD). */
+  usd: number;
+  /** Ledger keys that set it: land is price per acre times acres; every other line is one capex key. */
+  keys: { key: string; scope: 'pairing' | 'place'; status: Driver['status'] }[];
+}
+
+/**
+ * Start-up cost lines, biggest first, with the keys that set them. Capital
+ * costs barely move monthly profit, so the profit sensitivity never ranks
+ * them; they decide the cash needed, the loan and whether it is fundable.
+ */
+export function capitalDrivers(model: BusinessModel, opts: { evidence: Evidence; capexKey: (itemKey: string) => string }): CapitalDriver[] {
+  const status = (key: string): Driver['status'] => (opts.evidence.sourced.includes(key) ? 'sourced' : opts.evidence.guessed.includes(key) ? 'guessed' : 'guessed');
+  return model.startupCosts
+    .map((l) => {
+      const t = l.amount;
+      const usd = Math.round(t.mode);
+      if (l.key === 'land') return { line: l.label, usd, keys: [{ key: 'land.price_per_acre_usd', scope: 'place' as const, status: status('land.price_per_acre_usd') }, { key: 'site.acres', scope: 'pairing' as const, status: status('site.acres') }] };
+      if (l.key === 'ground_deposit') return null;
+      const key = opts.capexKey(l.key);
+      return { line: l.label, usd, keys: [{ key, scope: 'pairing' as const, status: status(key) }] };
+    })
+    .filter((x): x is CapitalDriver => x !== null && x.usd > 0)
+    .sort((a, b) => b.usd - a.usd);
+}
 
 export function driverKeys(
   model: BusinessModel,

@@ -7,7 +7,7 @@ import { computeLive, loadLive } from '../live.ts';
 import { AnalystPanel } from '../agents.tsx';
 import type { Candidate } from '../../../supabase/functions/_shared/evaluate.ts';
 import { cashWithHome, featuresFor, ideaChecks, inputUse, type Tenure } from '../../../supabase/functions/_shared/concept.ts';
-import { Block, ConceptBlock, DemandBlock, FeaturesBlock, Fold, Kpi, OwnBlock, PageNav, PlanPicker, RangeBars, ScoreParts, TENURE_NAME, Warnings } from '../idea.tsx';
+import { Block, ConceptBlock, DemandBlock, RedTeamPanel, RulesPanel, FeaturesBlock, Fold, Kpi, OwnBlock, PageNav, PlanPicker, RangeBars, ScoreParts, TENURE_NAME, Warnings } from '../idea.tsx';
 
 const scale = (t: Tri, k: number): Tri => ({ low: t.low * k, mode: t.mode * k, high: t.high * k });
 const capOcc = (t: Tri, k: number): Tri => ({ low: Math.min(0.95, t.low * k), mode: Math.min(0.95, t.mode * k), high: Math.min(0.95, t.high * k) });
@@ -115,8 +115,11 @@ const LABEL: Record<string, string> = {
   'demand.competitors_60min': 'Same-kind businesses within 60 min',
 };
 /** A readable name for an input, including the per-offer price and booking-rate keys. */
-function labelFor(key: string, streams: { key: string; label: string }[] = []): string {
+function labelFor(key: string, streams: { key: string; label: string }[] = [], lines: { key: string; label: string }[] = []): string {
   if (LABEL[key]) return LABEL[key];
+  if (key === 'site.acres') return 'Lot size (acres)';
+  const c = key.match(/^capex\.(.+)_usd$/);
+  if (c) return `${lines.find((l) => l.key.toLowerCase().replace(/[^a-z0-9_]+/g, '_') === c[1])?.label ?? c[1].replace(/_/g, ' ')}: start-up cost`;
   const name = (k: string) => streams.find((s) => s.key === k)?.label ?? k.replace(/_/g, ' ');
   let m = key.match(/^price\.(.+)_usd$/);
   if (m) return `${name(m[1])}: price`;
@@ -371,8 +374,13 @@ export function PairingPage({ id }: { id: string }) {
       </Block>
 
       <Block id="risks" title="Risks, stop signs and cheapest tests">
+        {fromStore && storedR?.red_team && <RedTeamPanel redTeam={storedR.red_team} />}
+        {fromStore && storedR && !storedR.red_team && storedR.memo && (
+          <p className="banner small">An independent check of this analysis is running or queued: a second agent re-researches the prices, booking rates, land and build costs without seeing the analyst's sources.</p>
+        )}
         <AnalystPanel pairingId={id} result={storedR} />
         {!storedR && <p className="muted small">Run a full analysis to get the analyst's risks, stop signs and cheapest tests.</p>}
+        <RulesPanel rules={fromStore ? storedR?.rules : null} permits={card.permits ?? []} />
       </Block>
 
       <Block id="details" title="Details">
@@ -572,7 +580,7 @@ export function PairingPage({ id }: { id: string }) {
             <b>{Math.round(sourced * 100)}%</b> sourced · <b>{100 - Math.round(sourced * 100)}%</b> estimate (a starting value the research is still replacing). Only inputs the{' '}
             {TENURE_NAME[tenure ?? ''] ?? 'chosen'} plan uses are shown.
           </p>
-          {r?.missing && r.missing.length > 0 && <p className="err small">Not found yet (a cautious default was used): {r.missing.map((k: string) => labelFor(k, model?.streams)).join(', ')}</p>}
+          {r?.missing && r.missing.length > 0 && <p className="err small">Not found yet (a cautious default was used): {r.missing.map((k: string) => labelFor(k, model?.streams, model?.startupCosts)).join(', ')}</p>}
           <table>
             <thead>
               <tr>
@@ -588,7 +596,7 @@ export function PairingPage({ id }: { id: string }) {
               {shownInputs.map((a: Any) => (
                 <tr key={a.id} className={a.relevant ? '' : 'stale'}>
                   <td>
-                    {labelFor(a.key, model?.streams)}{' '}
+                    {labelFor(a.key, model?.streams, model?.startupCosts)}{' '}
                     <small className="muted">({a.subject_type === 'global' ? 'everywhere' : a.subject_id === p.locations?.id ? 'this place' : a.subject_type === 'pairing' ? 'this idea' : 'country'})</small>
                   </td>
                   <td>

@@ -90,7 +90,10 @@ export function inputUse(key: string, tenure: Tenure | undefined, value: number 
       return { use: 'Demand', relevant: true };
     case 'demand.seasonality':
       return { use: 'Monthly revenue', relevant: true };
+    case 'site.acres':
+      return { use: 'Lot size: land cost', relevant: tenure !== 'lease' };
     default:
+      if (key.startsWith('capex.')) return { use: 'Start-up cost', relevant: tenure !== 'lease' };
       if (key.startsWith('price.')) return { use: 'Price', relevant: true };
       if (key.startsWith('occupancy.')) return { use: 'Bookings', relevant: true };
       return { use: '', relevant: true };

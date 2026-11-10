@@ -321,3 +321,4 @@ button.primary { background: var(--accent); color: var(--card); border-color: va
 .ip-dir { flex: 0 0 1.3rem; height: 1.3rem; border-radius: 99px; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 0.85rem; }
 .ip-signals li.for .ip-dir { background: color-mix(in srgb, var(--ok) 20%, transparent); color: var(--ok); }
 .ip-signals li.against .ip-dir { background: color-mix(in srgb, var(--err) 18%, transparent); color: var(--err); }
+tr.ip-flag td { background: color-mix(in srgb, #d9a53b 12%, transparent); }

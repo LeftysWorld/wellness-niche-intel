@@ -7,9 +7,11 @@ import { ToolError, type AgentContext, type AgentDef, type AgentTool } from '../
 import { confirmQuote, fetchPage, figureTools, webSearch } from '../agent-tools.ts';
 import { analyzePairing } from '../analysis.ts';
 import { db, must } from '../db.ts';
-import { driverKeys, PAIRING_KEY, uncertaintyBand } from '../drivers.ts';
+import { capitalDrivers, driverKeys, PAIRING_KEY, uncertaintyBand } from '../drivers.ts';
+import { capexKeyFor, PRICE_UNITS } from '../model-builder.ts';
+import { isOfficialHost, RULE_TOPICS, rulesGap, type RuleRecord } from '../rules.ts';
 import { hostOf } from '../evidence.ts';
-import { AREA_KINDS, demandGaps, demandPull, kindsFor, MARKET_KINDS, type DemandKind, type DemandScope, type DemandSignal } from '../demand.ts';
+import { AREA_KINDS, demandGaps, demandPull, kindDirectionProblem, kindsFor, MARKET_KINDS, type DemandKind, type DemandScope, type DemandSignal } from '../demand.ts';
 import { KEY_GUIDE, PLAUSIBLE, REQUIRED_LOCATION_KEYS, writeAssumptions, type LocationRow } from '../ledger.ts';
 import type { NicheModelSpec } from '../model-builder.ts';
 import { evaluate, type NicheRow } from '../pairing.ts';
@@ -88,7 +90,10 @@ export const pairingAnalyst: AgentDef<AnalystParams> = {
           target_band: c.settings.target_band,
           evidence: { sourced_share: best.build.evidence.sourcedShare, niche_economics_guessed: best.build.evidence.nicheGuessed, missing: best.build.evidence.missing },
           top_drivers: drivers.slice(0, 6).map((d) => ({ ...d, definition: d.key ? (KEY_GUIDE[d.key] ?? definitionFor(d.key)) : 'part of the niche\'s own economics (not researched per idea)' })),
-          streams: best.build.model.streams.map((s) => ({ key: s.key, label: s.label, market: s.market, price_mode: s.price.mode, mature_occupancy_mode: s.matureOccupancy.mode, units: s.units })),
+          streams: best.build.model.streams.map((s) => ({ key: s.key, label: s.label, market: s.market, price_unit: spec.streams.find((x) => x.key === s.key)?.priceUnit ?? 'not set', price_mode: s.price.mode, mature_occupancy_mode: s.matureOccupancy.mode, units: s.units })),
+          top_capital_drivers: capitalDrivers(best.build.model, { evidence: best.build.evidence, capexKey: capexKeyFor }).slice(0, 6),
+          land_acres: best.build.model.startupCosts.find((l) => l.key === 'land')?.label ?? null,
+          site_needs: (niche.card as Record<string, unknown>).prerequisites ?? [],
           warnings: r.warnings,
         };
       },
@@ -100,7 +105,18 @@ export const pairingAnalyst: AgentDef<AnalystParams> = {
     const [record, commit] = figureTools({
       agent: 'pairing-analyst',
       allowed: (k) => PAIRING_KEY.test(k) || (REQUIRED_LOCATION_KEYS as readonly string[]).includes(k) || RAW_PLACE_KEYS.includes(k),
-      range: (k) => (k.startsWith('occupancy.') ? [0.02, 0.95] : k.startsWith('price.') && !RAW_PLACE_KEYS.includes(k) ? [1, 50000] : (PLAUSIBLE[k] ?? null)),
+      range: (k) =>
+        k.startsWith('occupancy.') ? [0.02, 0.95]
+        : k.startsWith('capex.') ? [200, 5_000_000]
+        : k === 'site.acres' ? [0.1, 1000]
+        : k.startsWith('price.') && !RAW_PLACE_KEYS.includes(k) ? [1, 50000]
+        : (PLAUSIBLE[k] ?? null),
+      terms: (k) => {
+        const m = k.match(/^price\.([a-z0-9_]+)_usd$/);
+        if (!m || RAW_PLACE_KEYS.includes(k) || k.startsWith('price.index')) return null;
+        const spec = ctx.scratch.stream_units as Record<string, string> | undefined;
+        return { unit: spec?.[m[1]], units: PRICE_UNITS };
+      },
       subject: (k) =>
         PAIRING_KEY.test(k)
           ? { subject_type: 'pairing', subject_id: ctx.params.pairing_id }
@@ -179,11 +195,14 @@ export const pairingAnalyst: AgentDef<AnalystParams> = {
       async run(input: Omit<DemandSignal, 'host'> & { quote: string }, c) {
         const scope = input.scope as DemandScope;
         if (!kindsFor(scope).includes(input.kind as DemandKind)) throw new ToolError(`${input.kind} is not a ${scope} signal. Use one of: ${kindsFor(scope).join(', ')}.`);
+        const direction = input.direction === 'against' ? 'against' : 'for';
+        const wrongWay = kindDirectionProblem(input.kind as DemandKind, direction);
+        if (wrongWay) throw new ToolError(wrongWay);
         if (!(await confirmQuote(c as unknown as AgentContext, input.url, input.quote))) throw new ToolError('That quote is not on the page. Copy it exactly.');
         const list = ((c.scratch.demand_signals ??= []) as DemandSignal[]);
         if (list.some((x) => x.url === input.url && x.kind === input.kind)) return 'Already recorded from that page.';
         const strength = Math.max(1, Math.min(3, Math.round(Number(input.strength)))) as 1 | 2 | 3;
-        list.push({ scope, kind: input.kind, direction: input.direction === 'against' ? 'against' : 'for', strength, finding: String(input.finding).slice(0, 400), url: input.url, host: hostOf(input.url) });
+        list.push({ scope, kind: input.kind, direction, strength, finding: String(input.finding).slice(0, 400), url: input.url, host: hostOf(input.url) });
         return { recorded: list.length, market: list.filter((x) => x.scope === 'market').length, area: list.filter((x) => x.scope === 'area').length };
       },
     };
@@ -200,7 +219,33 @@ export const pairingAnalyst: AgentDef<AnalystParams> = {
       },
     };
 
-    const tools: AgentTool<AnalystParams>[] = [runModel, webSearch, fetchPage, record, commit, recordCompetitor, commitCompetition, recordDemand, assessDemand];
+    const recordRule: AgentTool<AnalystParams> = {
+      name: 'record_rule',
+      description:
+        'Record a rule that applies to this business here, from an official page (government site or published code), with an exact quote: who issues the permit and what it requires (health and pool/spa rules, zoning and use, building, business licence, lodging tax). Names of agencies change; never write one from memory.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          topic: { type: 'string', enum: [...RULE_TOPICS] },
+          agency: { type: 'string', description: 'The authority exactly as its own page names it' },
+          requirement: { type: 'string', description: 'One plain sentence: what is required and when' },
+          url: { type: 'string' },
+          quote: { type: 'string', description: 'Exact words from the page' },
+        },
+        required: ['topic', 'agency', 'requirement', 'url', 'quote'],
+      },
+      async run(input: RuleRecord, c) {
+        if (!isOfficialHost(hostOf(input.url))) throw new ToolError(`${hostOf(input.url)} is not an official source. Find the rule on the government agency's own site or the published code.`);
+        if (!(await confirmQuote(c as unknown as AgentContext, input.url, input.quote))) throw new ToolError('That quote is not on the page. Copy it exactly.');
+        if (!(await confirmQuote(c as unknown as AgentContext, input.url, input.agency))) throw new ToolError(`"${input.agency}" is not named on that page. Use the agency name as the page shows it.`);
+        const list = ((c.scratch.rules ??= []) as RuleRecord[]);
+        if (list.some((r) => r.url === input.url && r.requirement === input.requirement)) return 'Already recorded.';
+        list.push({ topic: input.topic, agency: String(input.agency).slice(0, 200), requirement: String(input.requirement).slice(0, 400), url: input.url, quote: String(input.quote).slice(0, 400) });
+        return { recorded: list.length };
+      },
+    };
+
+    const tools: AgentTool<AnalystParams>[] = [runModel, webSearch, fetchPage, record, commit, recordCompetitor, commitCompetition, recordDemand, assessDemand, recordRule];
     if (Deno.env.get('GOOGLE_MAPS_API_KEY')) tools.push(findPlaces);
     return tools;
   },
@@ -209,11 +254,16 @@ export const pairingAnalyst: AgentDef<AnalystParams> = {
     ctx.scratch.location_id = location.id;
     ctx.scratch.country_id = location.parent_id ?? location.id;
     const card = niche.card as Record<string, unknown>;
+    const spec = card.model as NicheModelSpec;
+    ctx.scratch.stream_units = Object.fromEntries(spec.streams.filter((s) => s.priceUnit).map((s) => [s.key, s.priceUnit]));
+    ctx.scratch.needs_permits = Array.isArray(card.permits) && (card.permits as unknown[]).length > 0;
     return [
       `Analyse this business idea: **${niche.name}** in **${location.name}** (${location.country_code}).`,
       card.summary || card.description ? `What it is: ${String(card.summary ?? card.description).slice(0, 600)}` : '',
       Array.isArray(card.competitor_terms) ? `Words competitors use: ${(card.competitor_terms as string[]).join(', ')}.` : '',
+      Array.isArray(card.permits) && card.permits.length ? `Permits the write-up expects (unsourced, written from memory; confirm on official pages): ${(card.permits as string[]).join('; ')}.` : '',
       `Current screening score: ${p.score_total ?? 'n/a'}.`,
+      await redTeamNote(p.latest_result_id),
       `Stop researching when the band from run_model is at or below ${ctx.settings.target_band}, or the top drivers are sourced, or more research would not change the decision.`,
       'Start with run_model.',
     ].filter(Boolean).join('\n');
@@ -245,7 +295,10 @@ export const pairingAnalyst: AgentDef<AnalystParams> = {
     },
   },
   checkFinish(ctx) {
-    return demandGaps((ctx.scratch.demand_signals ?? []) as DemandSignal[], ctx.scratch.demand_assessed as number | undefined);
+    return (
+      demandGaps((ctx.scratch.demand_signals ?? []) as DemandSignal[], ctx.scratch.demand_assessed as number | undefined) ??
+      rulesGap(Boolean(ctx.scratch.needs_permits), (ctx.scratch.rules ?? []) as RuleRecord[])
+    );
   },
   async onFinish(ctx, result) {
     const { demand, ...memo } = result as Record<string, unknown> & { demand?: Record<string, unknown> };
@@ -254,19 +307,35 @@ export const pairingAnalyst: AgentDef<AnalystParams> = {
       research: false,
       verify: true,
       verifyInBackground: true,
-      extras: { memo: { ...memo, by: 'pairing-analyst', at: new Date().toISOString() }, research: research(ctx), demand: pull },
+      extras: { memo: { ...memo, by: 'pairing-analyst', at: new Date().toISOString() }, research: research(ctx), demand: pull, rules: ctx.scratch.rules ?? [] },
     });
     await saveDemandScore(ctx.params.pairing_id, pull);
+    // An independent agent re-researches the inputs that matter most, without seeing these sources.
+    await db().rpc('queue_agent', { p_name: 'red-team', p_body: { result_id: out.resultId } });
     return out;
   },
   async onStop(ctx, reason) {
     // Out of budget or turns: still store the analysis with whatever was researched, unverified.
     const pull = demandOf(ctx);
-    const out = await analyzePairing(ctx.run, ctx.params.pairing_id, { research: false, verify: false, extras: { research: { ...research(ctx), stopped: reason }, demand: pull } });
+    const out = await analyzePairing(ctx.run, ctx.params.pairing_id, { research: false, verify: false, extras: { research: { ...research(ctx), stopped: reason }, demand: pull, rules: ctx.scratch.rules ?? [] } });
     await saveDemandScore(ctx.params.pairing_id, pull);
     return out;
   },
 };
+
+/** Gaps an independent check found in the previous analysis: the analyst must reconcile them with sources. */
+// deno-lint-ignore no-explicit-any
+async function redTeamNote(resultId: string | null): Promise<string> {
+  if (!resultId) return '';
+  const ar = await db().from('analysis_results').select('result').eq('id', resultId).maybeSingle();
+  const findings = ((ar.data?.result as Record<string, any> | undefined)?.red_team?.findings ?? []) as { key: string; label: string; current: number; found: number; urls: string[]; flagged: boolean }[];
+  const flagged = findings.filter((f) => f.flagged);
+  if (!flagged.length) return '';
+  return [
+    'An independent check of the previous analysis found different values. Research each again and commit the value the evidence supports (it may be either):',
+    ...flagged.map((f) => `- ${f.key} (${f.label}): analysis used ${f.current}, the check found ${f.found} at ${f.urls.join(' ')}`),
+  ].join('\n');
+}
 
 /** Keep the demand score with the idea, so the next screening scores demand for this place, not just the niche. */
 async function saveDemandScore(pairingId: string, pull: ReturnType<typeof demandOf>) {

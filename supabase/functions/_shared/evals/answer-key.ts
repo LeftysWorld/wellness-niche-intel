@@ -12,6 +12,8 @@ export interface AnswerKeyEntry {
   id: string;
   /** Location slug in the database. */
   location: string;
+  /** For a value researched for one idea (a comparable price): the niche slug. The pairing's own value is graded. */
+  niche?: string;
   key: string;
   /** Accepted range, in the value's own unit. Local-currency ranges are converted with the current exchange rate. */
   range: [number, number];
@@ -87,6 +89,45 @@ export const ANSWER_KEY: AnswerKeyEntry[] = [
     checked: '2026-11-07',
     sources: ['https://land.com/Madison-County-NC/all-land/', 'https://www.homes.com/madison-county-nc/land-for-sale'],
     note: 'Median asking price across all listings is about $12,300/acre (mostly 50+ acre tracts); 1-10 acre parcels list at roughly $10,000-$60,000/acre.',
+  },
+  {
+    id: 'us-sc-upstate-land-2026',
+    location: 'us-sc-upstate',
+    key: 'land.price_per_acre_usd',
+    // Active listings around Travelers Rest, Nov 2026: 11.4 ac at $19,737/ac, 14.2 ac at $24,246/ac,
+    // 10.53 ac at $35,613/ac, 7.77 ac at $37,967/ac, 54.7 ac at $49,360/ac, 6 ac at $83,333/ac.
+    range: [19_000, 85_000],
+    checked: '2026-11-10',
+    sources: [
+      'https://landsearch.com/properties/100-chestnut-mountain-rd-travelers-rest-sc-29690/3881993',
+      'https://www.landsearch.com/properties/504-chinquapin-rd-travelers-rest-sc-29690/4974220',
+      'https://www.landsearch.com/properties/31-drake-rd-travelers-rest-sc-29690/5435958',
+      'https://www.landsearch.com/properties/200-chestnut-mountain-rd-travelers-rest-sc/5161586',
+    ],
+    note: 'Asking prices for 5-55 acre tracts within about 20 minutes of Travelers Rest. Small lots near town run higher per acre.',
+  },
+  {
+    id: 'nature-bathhouse-us-sc-upstate-private',
+    location: 'us-sc-upstate',
+    niche: 'nature-bathhouse',
+    key: 'price.private_sessions_usd',
+    // Per booking, not per person: Sauna House Greenville Sauna Cabana up to 4 people $200 (2 hours);
+    // Drip Sauna (Asheville) private session for 1-6 guests from $188 per party.
+    range: [185, 230],
+    checked: '2026-11-10',
+    sources: ['https://www.saunahouse.com/pages/team-wellness', 'https://letsbatch.com/experiences/a3d88aa1-5411-4708-8075-7871b81dabb9'],
+    note: 'Private sauna room for a small group, per booking.',
+  },
+  {
+    id: 'nature-bathhouse-us-sc-upstate-daypass',
+    location: 'us-sc-upstate',
+    niche: 'nature-bathhouse',
+    key: 'price.day_passes_usd',
+    // Drip Sauna community session $30/person (as of Dec 2025); US median drop-in about $35.
+    range: [25, 40],
+    checked: '2026-11-10',
+    sources: ['https://boilingbones.blogspot.com/2025/12/drip-nordic-sauna-north-carolina.html'],
+    note: 'Community sauna session per person.',
   },
 ];
 

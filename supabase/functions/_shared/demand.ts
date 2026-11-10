@@ -99,3 +99,11 @@ export function demandGaps(signals: DemandSignal[], assessedCount: number | unde
   if (assessedCount !== signals.length) return 'Call assess_demand after your last demand signal, then finish.';
   return null;
 }
+
+/** Some kinds only point one way: a crowded market is never evidence for demand. Returns the problem, or null. */
+export function kindDirectionProblem(kind: DemandKind, direction: 'for' | 'against'): string | null {
+  if (kind === 'saturation' && direction !== 'against') {
+    return 'saturation means the market is crowded, which is evidence against. A thin market with few operators is not demand either: record what shows people want it (busy operators, waitlists, related demand) instead.';
+  }
+  return null;
+}

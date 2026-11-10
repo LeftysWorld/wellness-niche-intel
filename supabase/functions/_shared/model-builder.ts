@@ -42,9 +42,14 @@ export interface StreamSpec {
   monthsToMature: Tri;
   ownerHoursPerSale?: number;
   seasonality?: number[];
+  /** What one price buys: per person, per booking (a group or room), per night, per month… Price research must match it. */
+  priceUnit?: PriceUnit;
   /** Who buys: people living nearby, or travellers. Defaults from requiresPopulation. */
   market?: 'local' | 'destination';
 }
+
+export const PRICE_UNITS = ['per_person', 'per_booking', 'per_night', 'per_month', 'per_unit'] as const;
+export type PriceUnit = (typeof PRICE_UNITS)[number];
 
 /** What kind of site the niche needs, which decides which lease applies. */
 export type SiteType = 'house' | 'commercial' | 'estate';
@@ -63,6 +68,11 @@ export interface NicheModelSpec {
   siteType?: SiteType;
   variablePct: Tri;
   requiresPopulation?: boolean;
+  /**
+   * When guests want this kind of business, month by month (Jan..Dec, around 1).
+   * A sauna peaks in winter; a pool in summer. The place's own curve only adjusts it.
+   */
+  seasonality?: number[];
   streams: StreamSpec[];
   perSale: Record<string, { usd: Tri; scale: Scale }>;
   fixed: { key: string; label: string; usd: Tri; scale: Scale; applies: Applies }[];
@@ -179,6 +189,32 @@ const HOURS_PER_FTE = 173;
 
 /** Lenders want more equity from a business with no operating history. */
 
+/** Ledger key for a researched start-up cost line (the whole line, in USD). */
+export function capexKeyFor(itemKey: string): string {
+  return `capex.${itemKey.toLowerCase().replace(/[^a-z0-9_]+/g, '_')}_usd`;
+}
+
+/**
+ * The year's demand shape. The niche's own curve (when it has one) leads; the
+ * place's curve, which mostly reflects visitors, adjusts it gently. Travellers
+ * follow the place more than locals do. Each curve averages 1.
+ */
+export function seasonCurves(niche: number[] | undefined, place: number[] | undefined): { curve?: number[]; localCurve?: number[] } {
+  const ok = (c?: number[]) => (Array.isArray(c) && c.length === 12 && c.every((x) => Number.isFinite(x) && x > 0) ? c : undefined);
+  const n = ok(niche);
+  const p = ok(place);
+  const norm = (c: number[]) => {
+    const m = c.reduce((a, b) => a + b, 0) / 12;
+    return c.map((x) => Math.round((x / m) * 1000) / 1000);
+  };
+  if (!n) return { curve: p, localCurve: p?.map((x) => Math.sqrt(x)) };
+  if (!p) return { curve: norm(n), localCurve: norm(n) };
+  return {
+    curve: norm(n.map((x, i) => x * Math.sqrt(p[i]))),
+    localCurve: norm(n.map((x, i) => x * Math.pow(p[i], 0.25))),
+  };
+}
+
 function parseCurve(v: LedgerValue | undefined): number[] | undefined {
   if (!v?.value_text) return undefined;
   try {
@@ -249,10 +285,9 @@ export function buildModel(input: BuildInput): BuildOutput {
   const localDemand = population !== null ? Math.min(1.3, Math.max(0.3, Math.sqrt(population / 400000))) : destinationDemand;
   // Competition: comparable businesses within about 60 minutes, counted by the analyst agent for this idea.
   const crowding = has('demand.competitors_60min') ? competitionFactor(readMode('demand.competitors_60min', 0)) : 1;
-  const curve = parseCurve(ledger.get('demand.seasonality'));
+  const placeCurve = parseCurve(ledger.get('demand.seasonality'));
   if (ledger.get('demand.seasonality')) note('demand.seasonality', ledger.get('demand.seasonality')!);
-  // Locals are steadier through the year than travellers.
-  const localCurve = curve?.map((x) => Math.sqrt(x));
+  const { curve, localCurve } = seasonCurves(spec.seasonality, placeCurve);
 
   const scaled = (t: Tri, s: Scale | undefined): Tri =>
     s === 'build' ? mul(t, buildIndex) : s === 'equipment' ? mul(t, equipmentIndex) : s === 'price' ? mul(t, priceLocal) : t;
@@ -297,6 +332,9 @@ export function buildModel(input: BuildInput): BuildOutput {
   const house = read('lease.finca_monthly_usd', point(3000));
   const siteRent = site.key === 'lease.finca_monthly_usd' ? house : has(site.key) ? read(site.key, house) : (missing.push(site.key), scaleTri(house, site.vsHouse));
 
+  // Lot size: researched for this idea when the niche's default is too small or too big.
+  const acres = has('site.acres') ? (note('site.acres', ledger.get('site.acres')!), Math.max(0.1, ledger.get('site.acres')!.value_num!)) : template.land_acres;
+
   // Startup costs.
   const startup: CostLine[] = [];
   let landValue = 0;
@@ -306,18 +344,18 @@ export function buildModel(input: BuildInput): BuildOutput {
   const appliesTo = (a: Applies) => a === 'both' || a === (builds ? 'own' : 'lease');
   // Ground rent: scouted rent per acre, else a typical yield on the land's value.
   const groundRent = (): Tri => {
-    if (has('lease.land_monthly_usd_per_acre')) return scaleTri(read('lease.land_monthly_usd_per_acre', point(50)), template.land_acres);
+    if (has('lease.land_monthly_usd_per_acre')) return scaleTri(read('lease.land_monthly_usd_per_acre', point(50)), acres);
     missing.push('lease.land_monthly_usd_per_acre');
     const perAcre = read('land.price_per_acre_usd', point(20000));
     const yieldPct = has('lease.ground_rent_yield_pct') ? read('lease.ground_rent_yield_pct', point(0.06)) : { low: 0.04, mode: 0.06, high: 0.08 };
-    return scaleTri(scaleTri(perAcre, normalizeTri(yieldPct).mode / 12), template.land_acres);
+    return scaleTri(scaleTri(perAcre, normalizeTri(yieldPct).mode / 12), acres);
   };
   const lease = tenure === 'lease' ? siteRent : tenure === 'ground' ? groundRent() : point(0);
   if (tenure === 'own') {
     const perAcre = read('land.price_per_acre_usd', point(20000));
-    const land = scaleTri(perAcre, template.land_acres);
+    const land = scaleTri(perAcre, acres);
     landValue = normalizeTri(land).mode;
-    startup.push({ key: 'land', label: `Land (${template.land_acres} acres)`, amount: land });
+    startup.push({ key: 'land', label: `Land (${acres} acres)`, amount: land });
   }
   if (tenure === 'ground') startup.push({ key: 'ground_deposit', label: 'Land lease deposit (2 months)', amount: scaleTri(lease, 2) });
   for (const item of template.items) {
@@ -328,7 +366,10 @@ export function buildModel(input: BuildInput): BuildOutput {
     }
     if (!item.usd) continue;
     const qty = item.qtyFrom ? unitsByStream[item.qtyFrom] ?? 1 : item.qty ?? 1;
-    const amount = scaleTri(scaled(item.usd, item.scale), qty);
+    // A cost researched for this idea (quotes, cost guides, local builders) replaces the niche's estimate for the whole line.
+    const capexKey = capexKeyFor(item.key);
+    const researched = ledger.get(capexKey);
+    const amount = researched?.value_num != null ? (note(capexKey, researched), ledgerTri(researched)) : scaleTri(scaled(item.usd, item.scale), qty);
     if (tenure === 'own' && item.scale === 'build') buildingValue += normalizeTri(amount).mode;
     startup.push({ key: item.key, label: item.label, amount });
   }
@@ -339,7 +380,7 @@ export function buildModel(input: BuildInput): BuildOutput {
     .filter((f) => !RENT_LINE.test(`${f.key} ${f.label}`))
     .map((f) => ({ key: f.key, label: f.label, amount: scaled(f.usd, f.scale) }));
   if (tenure === 'lease') fixed.unshift({ key: 'lease', label: 'Lease', amount: lease });
-  if (tenure === 'ground') fixed.unshift({ key: 'ground_rent', label: `Land rent (${template.land_acres} acres)`, amount: lease });
+  if (tenure === 'ground') fixed.unshift({ key: 'ground_rent', label: `Land rent (${acres} acres)`, amount: lease });
   // A solo owner does the work; any hours beyond their limit are paid for by the hour.
   // A team-run business carries the niche's own staff lines instead.
   const solo = String(profile.operator_model ?? 'solo') === 'solo';

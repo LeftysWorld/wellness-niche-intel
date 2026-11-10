@@ -373,3 +373,85 @@ export function DemandBlock({ demand, nicheScore, nicheEvidence }: { demand: Any
     </>
   );
 }
+
+/** The independent re-check: what it found for each input, and where it disagrees. */
+export function RedTeamPanel({ redTeam }: { redTeam: Any }) {
+  const findings: Any[] = redTeam.findings ?? [];
+  const flagged = findings.filter((f) => f.flagged).length;
+  const fmt = (key: string, v: number | null) => (v === null ? '—' : key.startsWith('occupancy.') ? `${Math.round(v * 100)}%` : usd(v));
+  return (
+    <div className="ip-card">
+      <div className="ip-row">
+        <h3>Independent check</h3>
+        <span className={`pill ${flagged ? 'warn' : 'ok'}`}>{flagged ? `${flagged} gap${flagged === 1 ? '' : 's'} over 25%` : 'No big gaps'}</span>
+      </div>
+      <p className="small muted">A second agent re-researched these inputs without seeing the analyst's sources. Gaps lower the confidence and go to the next analysis to reconcile.</p>
+      {redTeam.summary && <p className="small">{redTeam.summary}</p>}
+      <table>
+        <thead>
+          <tr>
+            <th>Input</th>
+            <th>Analysis used</th>
+            <th>Check found</th>
+            <th>Gap</th>
+            <th>Sources</th>
+          </tr>
+        </thead>
+        <tbody>
+          {findings.map((f) => (
+            <tr key={f.key} className={f.flagged ? 'ip-flag' : ''}>
+              <td>{f.label}</td>
+              <td>{fmt(f.key, f.current)}</td>
+              <td>{fmt(f.key, f.found)}</td>
+              <td className={f.flagged ? 'err' : 'muted'}>{f.gap === null ? 'not found' : `${Math.round(f.gap * 100)}%`}</td>
+              <td className="small">
+                {(f.urls ?? []).map((u: string, i: number) => (
+                  <a key={u} href={u} target="_blank" rel="noreferrer">
+                    {i ? ' · ' : ''}
+                    {i + 1}
+                  </a>
+                ))}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {(redTeam.not_checked ?? []).length > 0 && <p className="small muted">Not checked: {redTeam.not_checked.join('; ')}</p>}
+    </div>
+  );
+}
+
+/** Rules and permits: sourced from official pages, with the write-up's unsourced list as leads. */
+export function RulesPanel({ rules, permits }: { rules: Any[] | null; permits: string[] }) {
+  const sourced = rules ?? [];
+  if (!sourced.length && !permits.length) return null;
+  return (
+    <div className="ip-card">
+      <h3>Rules and permits</h3>
+      {sourced.length > 0 ? (
+        <ul className="ip-signals">
+          {sourced.map((r, i) => (
+            <li key={i} className="for">
+              <span className="ip-dir" aria-hidden="true">
+                ✓
+              </span>
+              <span>
+                <b>{r.agency}.</b> {r.requirement}{' '}
+                <a href={r.url} target="_blank" rel="noreferrer">
+                  official source
+                </a>
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="banner warn small">Not yet confirmed on official pages. A full analysis records who permits this business here and what they require.</p>
+      )}
+      {permits.length > 0 && (
+        <p className="small muted">
+          From the niche write-up (unsourced, may be out of date): {permits.join('; ')}
+        </p>
+      )}
+    </div>
+  );
+}
